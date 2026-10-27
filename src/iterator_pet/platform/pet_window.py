@@ -99,8 +99,8 @@ class PetWindow(PetCanvas):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._timer.stop()
-        # NO save() HERE. Every mutator (toggle_click_through / toggle_rail /
-        # set_speed) already persists, so closing wrote nothing new -- but a TOOL
+        # NO save() HERE. Every mutator (toggle_click_through / toggle_rail)
+        # already persists, so closing wrote nothing new -- but a TOOL
         # that builds a window from a default ``Config`` and then closes it
         # overwrote the user's real config. That happened: ``tools/smoke_window.py``
         # reset ``scale`` from the user's 1.5 to the 2.2 default, which silently
@@ -177,11 +177,6 @@ class PetWindow(PetCanvas):
         self.config.show_rail = self.show_rail
         save(self.config)
         self.update()
-
-    def set_speed(self, speed: float) -> None:
-        self.simulation.set_rail_speed(speed)
-        self.config.speed = float(speed)
-        save(self.config)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()

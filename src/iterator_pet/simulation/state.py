@@ -53,6 +53,9 @@ class RenderState:
     behaviour: str
     time: float
     ticks: int
+    # 腔室矩形（仿真像素）。给渲染层做"屏幕边缘 = 房间墙"的收边：游戏里房间墙
+    # 离轨道很多格，肘点折出去也看不见；桌面这边墙就是屏幕边界（renderer.draw_arm）。
+    bounds: tuple[float, float, float, float] | None = None
 
     def lerp(self, other: "RenderState", alpha: float) -> "RenderState":
         if alpha <= 0.0:
@@ -98,6 +101,7 @@ class RenderState:
             behaviour=other.behaviour,
             time=other.time,
             ticks=other.ticks,
+            bounds=other.bounds,
         )
 
 
@@ -509,6 +513,7 @@ class SimulationState:
             behaviour=self.behaviour,
             time=self.time,
             ticks=self.ticks,
+            bounds=self._bounds,
         )
 
     def interpolate(self, alpha: float) -> RenderState:

@@ -64,15 +64,6 @@ class PetTray(QSystemTrayIcon):
         self.action_rail.triggered.connect(self.window.toggle_rail)
         menu.addAction(self.action_rail)
 
-        speed_menu = menu.addMenu("移动速度")
-        for label, value in (("慢", 42.0), ("中", 74.0), ("快", 130.0)):
-            action = QAction(label, speed_menu)
-            action.setCheckable(True)
-            action.setChecked(abs(config.speed - value) < 1.0)
-            action.triggered.connect(lambda _checked=False, v=value: self.window.set_speed(v))
-            speed_menu.addAction(action)
-        self._speed_menu = speed_menu
-
         menu.addSeparator()
         self.action_dev = QAction("开发者面板", menu)
         self.action_dev.setCheckable(True)
@@ -106,6 +97,4 @@ class PetTray(QSystemTrayIcon):
     def sync(self) -> None:
         self.action_click.setChecked(self.window.click_through)
         self.action_rail.setChecked(self.window.show_rail)
-        for action in self._speed_menu.actions():
-            expected = {"慢": 42.0, "中": 74.0, "快": 130.0}.get(action.text(), -1.0)
-            action.setChecked(abs(self.window.simulation.base_speed - expected) < 1.0)
+

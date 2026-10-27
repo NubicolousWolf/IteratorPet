@@ -249,6 +249,88 @@ def _limb(painter: QPainter, a, elbow, b, width: float, alpha: int = 255, mesh_s
         painter.drawPath(path)
 
 
+def _inside(point, bounds, margin: float = 0.0) -> bool:
+    bx, by, bw, bh = bounds
+    return (bx + margin <= point[0] <= bx + bw - margin
+            and by + margin <= point[1] <= by + bh - margin)
+
+
+def _fit_inside(origin, direction, length: float, bounds) -> float:
+    """把从 ``origin`` 沿 ``direction`` 伸 ``length`` 的杆件截到腔室里，返回可用长度。
+
+    桌面端增补，不是源码行为。活塞（``MirosLegSmallPart``，关节 0 长 50 px）从
+    肘点向外伸，而肘点本身可以合法地鼓到离弦 100 px（IK 的两个解之一，见
+    ``inverse_kinematic``），滑车轨道离腔室边只有 26 px —— 实测机械臂最多伸出
+    屏幕 59 px（底边，追角光标 90 s）。游戏里腔室外是实心边框（墙贴着轨道），
+    臂画在墙前没有观感问题；桌面上屏幕外什么都没有，被窗口裁掉就是一条硬切口，
+    所以这里只截杆件长度，不动肘点、不动肢体、不动速度。实测见
+    ``_work/scene_bleed_probe.py``。
+    """
+    bx, by, bw, bh = bounds
+    limit = length
+    for axis in (0, 1):
+        o = origin[axis]
+        d = direction[axis]
+        low = bx if axis == 0 else by
+        high = (bx + bw) if axis == 0 else (by + bh)
+        if o < low or o > high:
+            return 0.0  # 起点已经在腔室外，截不动，直接不画
+        if abs(d) < 1e-9:
+            continue
+        target = high if d > 0.0 else low
+        t = (target - o) / d
+        if t >= 0.0:
+            limit = min(limit, t)
+    return max(0.0, limit)
+
+
+ARM_DRAW_MARGIN = 8.0   # 肘点判"在腔室里"时给轮廓留的余量（肢体半宽 7 / 圆盘半径 6）
+
+
+def drawn_elbow(state: RenderState, index: int):
+    """这个关节的绘制肘点（``vector3``）和它连到的下一个点（``vector2``）。
+
+    源码口径（og.cs:135-141 + oracle.cs:45-53）::
+
+        vector2 = myJoint.next == null ? bodyChunks[1] : myJoint.next.pos
+        vector3 = myJoint.ElbowPos(timeStacker, vector2)
+        ElbowPos: InverseKinematic(vector2, pos, L/3, 2L/3, index%2==0 ? 1 : -1)
+
+    ``start`` 是 **vector2**、``target`` 才是本关节，所以肘点离下一个关节 L/3、
+    离本关节 2L/3；没有 ``next`` 的尾关节用 ``(L/3, L/3)``。这个函数原来写在
+    ``draw_arm`` 里并且把两个端点传反了（也没处理 y 轴镜像），画出来的肘点与源码
+    差整整 L/3（实测 100/50/30 px），肢体网格、活塞、拉杆全长在源码没有的点上，
+    与缆线钩点（``ArmChain.elbow_pos``）也对不上。
+
+    两处桌面端的改动，都只影响画不画得下、不动物理：
+
+    1. **翻肘**：肘点出了腔室就取 IK 的另一个解。方向和 oracle.cs:92-102 一样
+       （``vector = IK(..., flip)`` / ``a = IK(..., -flip)``，哪边在 Solid 瓦片里
+       就翻号），只是游戏的"实心"是房间瓦片，桌面这边对应腔室外（屏幕外什么都
+       没有，臂伸出去就被窗口裁掉）。实测只在关节 0 上触发，占 2.5-3.9% 的 tick，
+       10 分钟 14 段、最长 7.6 s，不会逐帧抖动。
+    2. 余量 ``ARM_DRAW_MARGIN``：只判肘点圆心在不在腔室里，边缘还会被切掉 12 px。
+
+    活塞（``MirosLegSmallPart``）另由 ``_fit_inside`` 截长度。
+    """
+    joints = state.joints
+    last = index == len(joints) - 1
+    joint = joints[index]
+    tip = joints[index + 1] if not last else state.body1
+    length = C.ARM_LENGTHS[index]
+    upper = length / 3.0
+    fore = length / 3.0 if last else length * 2.0 / 3.0
+    source_flip = 1.0 if index % 2 == 0 else -1.0
+    # flip 取负：本框架 y 轴朝下、游戏朝上，镜像会让翻转方向反过来
+    # （与 ArmChain.elbow_pos 用同一个换算）。
+    elbow = C.inverse_kinematic(tip, joint, upper, fore, -source_flip)
+    if state.bounds is not None and not _inside(elbow, state.bounds, ARM_DRAW_MARGIN):
+        mirrored = C.inverse_kinematic(tip, joint, upper, fore, source_flip)
+        if _inside(mirrored, state.bounds, ARM_DRAW_MARGIN):
+            elbow = mirrored
+    return elbow, tip
+
+
 def draw_arm(painter: QPainter, state: RenderState) -> None:
     """One ``ArmJointGraphics`` per joint, in the game's sprite order.
 
@@ -258,7 +340,6 @@ def draw_arm(painter: QPainter, state: RenderState) -> None:
     in front of it.
     """
     joints = state.joints
-    body0 = state.body0
     count = len(joints)
     metal = C.metal_colour()
     axle_colour = C.mix(metal, C.arm_highlight_colour(), 0.5)
@@ -266,10 +347,11 @@ def draw_arm(painter: QPainter, state: RenderState) -> None:
 
     for index in range(count):
         joint = joints[index]
-        tip = joints[index + 1] if index < count - 1 else body0
-        upper = C.ARM_LENGTHS[index] / 3.0
-        fore = C.ARM_LENGTHS[index] * 2.0 / 3.0 if index < count - 1 else C.ARM_LENGTHS[index] / 3.0
-        elbow = C.inverse_kinematic(joint, tip, upper, fore, 1.0 if index % 2 == 0 else -1.0)
+        elbow, tip = drawn_elbow(state, index)
+
+        # 活塞长度（源码 og.cs:103：scaleY = 2 / 1 / 0.5 × MirosLegSmallPart 25 px）。
+        piston_h = 25.0 * (2.0 if index == 0 else 1.0 if index == 1 else 0.5)
+
         aim = C.dir_vec(joint, elbow)
         root = (joint[0] + aim[0] * (12.0 if index == 0 else 2.0),
                 joint[1] + aim[1] * (12.0 if index == 0 else 2.0))
@@ -303,12 +385,14 @@ def draw_arm(painter: QPainter, state: RenderState) -> None:
         # MetalPart(0): MirosLegSmallPart (4x25 px), anchored at the elbow
         piston = tinted("MirosLegSmallPart", metal)
         piston_w = 4.0 * (1.5 if index == 0 else 1.0 if index == 1 else 0.8)
-        piston_h = 25.0 * (2.0 if index == 0 else 1.0 if index == 1 else 0.5)
         piston_dir = C.dir_vec(near, elbow)
+        piston_len = piston_h
+        if state.bounds is not None:
+            piston_len = _fit_inside(elbow, piston_dir, piston_h, state.bounds)
         painter.save()
         painter.translate(QPointF(*elbow))
         painter.rotate(atan2(piston_dir[1], piston_dir[0]) * 180.0 / pi + 90.0)
-        painter.drawPixmap(QRectF(-piston_w * 0.5, 0.0, piston_w, piston_h), piston, QRectF(piston.rect()))
+        painter.drawPixmap(QRectF(-piston_w * 0.5, 0.0, piston_w, piston_len), piston, QRectF(piston.rect()))
         painter.restore()
 
         bar = tinted("pixel", metal)

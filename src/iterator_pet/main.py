@@ -60,7 +60,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--scale", type=float, default=1.0)
     parser.add_argument("--fps", type=int, default=None, help="render frame rate")
-    parser.add_argument("--speed", type=float, default=None, help="rail speed in px/s")
     parser.add_argument("--click-through", action="store_true", help="start with OS click-through")
     parser.add_argument("--no-click-through", action="store_true")
     parser.add_argument("--no-tray", action="store_true", help="do not create a tray icon")
@@ -97,8 +96,6 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load()
     if args.fps:
         cfg.fps = max(15, args.fps)
-    if args.speed is not None:
-        cfg.speed = max(0.0, args.speed)
     if args.click_through:
         cfg.click_through = True
     if args.no_click_through:

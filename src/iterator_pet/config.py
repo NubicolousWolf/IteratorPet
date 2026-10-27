@@ -10,7 +10,6 @@ from pathlib import Path
 
 @dataclass
 class Config:
-    speed: float = 74.0
     margin: float = 34.0
     radius: float = 64.0
     click_through: bool = False
