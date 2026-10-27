@@ -35,7 +35,7 @@ $env:RAINWORLD\\\_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
 ## 开发
 
 ```bash
-python -m pytest -q                      # 73 项测试
+python -m pytest -q                      # 74 项测试
 python tools/selftest.py                 # 无依赖烟雾测试
 python tools/puppet\\\_portrait.py          # 1:1 人偶特写
 python tools/roam\\\_report.py 10           # 10 分钟漫游统计（行为占比 / 覆盖）

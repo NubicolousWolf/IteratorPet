@@ -55,15 +55,15 @@ def _app():
     return QApplication.instance() or QApplication([])
 
 
-def _corner_cursor(tick: int):
-    w, h = ROOM[2], ROOM[3]
+def _corner_cursor(tick: int, room=ROOM):
+    w, h = room[2], room[3]
     corners = ((30.0, 30.0), (w - 30.0, 30.0), (w - 30.0, h - 30.0), (30.0, h - 30.0))
     return corners[(tick // 80) % 4]
 
 
-def _render(state):
+def _render(state, room=ROOM):
     _app()
-    w, h = int(ROOM[2]), int(ROOM[3])
+    w, h = int(room[2]), int(room[3])
     image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
@@ -174,21 +174,33 @@ def test_the_tail_elbow_connects_to_body_chunk_one():
 # --------------------------------------------------------------------------
 # 3) 不出屏幕（逐 tick，不抽样）
 # --------------------------------------------------------------------------
-def test_the_arm_never_draws_outside_the_chamber():
-    """追角光标 120 s，**每一个 tick** 都渲染一遍，臂不许碰到腔室边缘。
+CHAMBERS = ((ROOM, 120.0), ((0.0, 0.0, 776.0, 415.0), 60.0))
+
+
+def test_the_arm_never_draws_outside_the_chamber__big_chamber():
+    _assert_arm_stays_inside(ROOM, 120.0)
+
+
+def test_the_arm_never_draws_outside_the_chamber__documented_chamber():
+    _assert_arm_stays_inside((0.0, 0.0, 776.0, 415.0), 60.0)
+
+
+def _assert_arm_stays_inside(room, seconds: float):
+    """追角光标 N 秒，**每一个 tick** 都渲染一遍，臂不许碰到腔室边缘。
 
     不能抽样：审计证明 `tick % 5` 会跳过 seed 7 的 tick 294、`tick % 10` 会跳过
     seed 1234 的 tick 3057 —— 我上一版就是那样写出一个永远绿的测试。
-    窗口必须 120 s：旧 IK（reach-clamp）在 seed 1234 的坏姿态最早出现在第 3010 tick（75 s），
-    60 s 窗口里它照样绿——那又是一个空转测试。
+    大腔室必须跑 120 s：旧 IK（reach-clamp）的坏姿态最早出现在第 3010 tick（75 s），
+    60 s 窗口里它照样绿——那又是一个空转测试。两种腔室都要跑（AGENTS §6.4）：
+    776x415 是文档举例的腔室，轨道内缩同样是 26 px，量下来 0 越界。
     """
-    sim = SimulationState(ROOM, seed=1234)
+    sim = SimulationState(room, seed=1234)
     bad = []
-    for tick in range(int(120.0 / GAME_DT)):
-        sim.set_cursor(_corner_cursor(tick))
+    for tick in range(int(seconds / GAME_DT)):
+        sim.set_cursor(_corner_cursor(tick, room))
         sim.step(GAME_DT)
-        if _outside_px(_render(sim.interpolate(1.0))):
+        if _outside_px(_render(sim.interpolate(1.0), room)):
             bad.append(tick)
             if len(bad) > 5:
                 break
-    assert not bad, f"这些 tick 画到腔室外：{bad[:6]}"
+    assert not bad, f"{room} 这些 tick 画到腔室外：{bad[:6]}"
