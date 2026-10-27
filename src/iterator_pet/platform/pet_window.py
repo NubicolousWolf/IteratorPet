@@ -83,7 +83,6 @@ class PetWindow(PetCanvas):
         self.simulation.resize(
             (0.0, 0.0, float(geo.width()) / zoom, float(geo.height()) / zoom)
         )
-        self.show_rail = bool(config.show_rail)
 
         interval = max(4, int(1000 / max(15, config.fps)))
         self._timer = QTimer(self)
@@ -172,12 +171,6 @@ class PetWindow(PetCanvas):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, self.click_through)
         self._click_through_native = applied
 
-    def toggle_rail(self) -> None:
-        self.show_rail = not self.show_rail
-        self.config.show_rail = self.show_rail
-        save(self.config)
-        self.update()
-
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()
         if key == Qt.Key.Key_Space:
@@ -186,9 +179,6 @@ class PetWindow(PetCanvas):
             self.close()
         elif key == Qt.Key.Key_C:
             self.toggle_click_through()
-        elif key == Qt.Key.Key_R:
-            self.show_rail = not self.show_rail
-            self.update()
         else:
             super().keyPressEvent(event)
 

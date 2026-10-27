@@ -40,19 +40,10 @@ def qc(rgb, alpha: int = 255) -> QColor:
 # --------------------------------------------------------------------------
 # rail + carriage
 # --------------------------------------------------------------------------
-def draw_rail(painter: QPainter, state: RenderState, rail, show_rail: bool = True) -> None:
-    if show_rail:
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        path = QPainterPath()
-        points = rail.sample(220)
-        path.moveTo(QPointF(*points[0]))
-        for p in points[1:]:
-            path.lineTo(QPointF(*p))
-        painter.setPen(QPen(qc((120, 92, 80), 90), 2.0))
-        painter.drawPath(path)
-        painter.setPen(QPen(qc((255, 168, 96), 26), 7.0))
-        painter.drawPath(path)
-
+def draw_rail(painter: QPainter, state: RenderState) -> None:
+    # 早期原型把整圈轨道画成一条橙色发光框（两层描边：2 px 暗线 + 7 px 暖光）。
+    # 游戏里轨道是砌进墙里的，只有滑车/底座露出来 —— 那条框是原型的调试辅助，
+    # 发布版删掉（2026-10-27）。要临时看轨道请用开发者面板的数字，不要再画回来。
     x, y = state.base_point
     d = state.base_dir                      # BaseDir: points into the chamber
     p = (-d[1], d[0])                       # Custom.PerpendicularVector
@@ -841,8 +832,6 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
 def draw_scene(
     painter: QPainter,
     state: RenderState,
-    rail,
-    show_rail: bool = True,
     scale: float = 1.0,
     sprites=None,
 ) -> None:
@@ -854,7 +843,7 @@ def draw_scene(
     painter.save()
     painter.scale(scale, scale)
 
-    draw_rail(painter, state, rail, show_rail)
+    draw_rail(painter, state)
     draw_halo(painter, state)
     draw_arm(painter, state)
     draw_cord(painter, state)

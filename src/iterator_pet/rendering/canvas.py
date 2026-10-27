@@ -26,7 +26,6 @@ class PetCanvas(QWidget):
         self.simulation = simulation
         self.alpha_provider = alpha_provider or (lambda: 0.0)
         self.sprites = sprites
-        self.show_rail = True
         self.scale = max(0.3, min(4.0, float(scale)))
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
@@ -41,8 +40,6 @@ class PetCanvas(QWidget):
         draw_scene(
             painter,
             state,
-            self.simulation.rail,
-            show_rail=self.show_rail,
             scale=self.scale,
             sprites=self.sprites,
         )

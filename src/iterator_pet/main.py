@@ -43,7 +43,7 @@ def render_preview(
 
         painter.fillRect(image.rect(), QColor("#171216"))
     painter.scale(zoom, zoom)
-    draw_scene(painter, sim.interpolate(1.0), sim.rail)
+    draw_scene(painter, sim.interpolate(1.0))
     painter.end()
 
     out = Path(path)

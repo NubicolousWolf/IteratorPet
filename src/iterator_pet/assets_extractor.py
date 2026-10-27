@@ -261,8 +261,12 @@ def extract(install: Path = DEFAULT_INSTALL, cache_dir: Path | None = None, forc
     )
 
 
-def ensure_sprites(cache_dir: Path | None = None) -> ExtractReport:
-    """Return the cache, extracting only when it is incomplete."""
+def ensure_sprites(cache_dir: Path | None = None, install: Path | None = None) -> ExtractReport:
+    """Return the cache, extracting only when it is incomplete.
+
+    ``install`` 为空时退回 ``DEFAULT_INSTALL``（开发机）；发布版由 `launcher.py`
+    把自动探测到的目录传进来。
+    """
     cache = Path(cache_dir) if cache_dir else cache_root()
     manifest_path = cache / "manifest.json"
     complete = manifest_path.is_file() and all(
@@ -282,7 +286,7 @@ def ensure_sprites(cache_dir: Path | None = None) -> ExtractReport:
             colors={k: tuple(v) for k, v in data.get("colors", {}).items()},
             notes=list(data.get("notes", [])),
         )
-    return extract(cache_dir=cache)
+    return extract(Path(install) if install else DEFAULT_INSTALL, cache_dir=cache)
 
 
 def sprite_path(name: str, cache_dir: Path | None = None) -> Path:

@@ -16,7 +16,8 @@ class Config:
     always_on_top: bool = True
     fps: int = 60
     scale: float = 2.2
-    show_rail: bool = True
+    # Rain World 安装目录（启动器第一次运行时自动探测并写入；空 = 还没初始化）
+    install: str = ""
 
 
 def config_dir() -> Path:

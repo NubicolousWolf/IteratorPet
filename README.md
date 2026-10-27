@@ -2,17 +2,32 @@
 
 一只迭代器桌宠，暂时是fp桌宠。
 
-> 预览图由本仓库代码离线渲染：`python -m iterator\\\_pet.main --preview out.png --width 1280 --height 720 --scale 2.2`
+> 预览图由本仓库代码离线渲染：`python -m iterator_pet.main --preview out.png --width 1280 --height 720 --scale 2.2`
 
-## 运行
+## 发布版（双击 `启动.exe`）
+
+发布包解开后直接双击 `启动.exe`（`五块卵石/启动.exe`）。
+
+* **第一次运行**：自动在 Steam 库里找正版 Rain World（注册表 → `libraryfolders.vdf` → 各盘
+  `steamapps/common/Rain World`），找不到会弹窗让你指到游戏根目录（里面有 `RainWorld.exe` 和
+  `RainWorld_Data` 文件夹）；然后从你自己的游戏里切出基础图元，写进
+  `%LOCALAPPDATA%\IteratorPet\cache\sprites\`。
+* **之后每次运行**：配置里的路径还在就直接启动；缓存缺了才重新切一次。**默认不带开发者面板**。
+* 换机器 / 重装游戏 / 缓存坏了：`启动.exe --setup` 强制重走一遍探测。
+* 排障日志：`%LOCALAPPDATA%\IteratorPet\launcher.log`（初始化过程）、
+  `launcher-crash.log`（启动异常栈）。
+
+托盘菜单可调鼠标穿透、开发者面板；配置持久化在 `%LOCALAPPDATA%\IteratorPet\config.json`
+（移速菜单因为从来没生效过，2026-10-27 已删，见 docs/ROADMAP.md §1.7）。
+
+## 从源码运行
 
 ```bash
-python -m pip install -r requirements.txt   # 或： pip install PySide6
+python -m pip install -r requirements.txt   # 或： pip install PySide6 UnityPy
 $env:PYTHONPATH = "src"
-python -m iterator\\\_pet.main
+python -m iterator_pet.main                 # 桌宠本体
+python -m iterator_pet.launcher             # 发布版入口（先找游戏、再启动）
 ```
-
-托盘菜单可调置顶、鼠标穿透、显示滑轨、开发者面板（移速菜单因为从来没生效过，2026-10-27 已删，见 docs/ROADMAP.md §1.7）；配置持久化在 `%LOCALAPPDATA%\IteratorPet\config.json`。
 
 ## 功能
 
@@ -29,33 +44,40 @@ python -m iterator\\\_pet.main
 找不到游戏时会退化为等价像素图元，仍可运行。安装路径可用环境变量覆盖：
 
 ```powershell
-$env:RAINWORLD\\\_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
+$env:RAINWORLD_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
 ```
+
+托盘缩略图 `src/iterator_pet/assets/tray.png` 是本仓库渲染管线画出来的人偶全身像
+（`tools/puppet_portrait.py` 联络表左起第一个，128 px），不是从游戏里切出来的图。
 
 ## 开发
 
 ```bash
 python -m pytest -q                      # 74 项测试
 python tools/selftest.py                 # 无依赖烟雾测试
-python tools/puppet\\\_portrait.py          # 1:1 人偶特写
-python tools/roam\\\_report.py 10           # 10 分钟漫游统计（行为占比 / 覆盖）
+python tools/puppet_portrait.py          # 1:1 人偶特写（顺带刷新托盘缩略图素材）
+python tools/roam_report.py 10           # 10 分钟漫游统计（行为占比 / 覆盖）
 python tools/devpanel.py --cursor sweep  # 开发者面板：实时看行为、抽签权重、臂展、缆线拉伸
-python -m iterator\\\_pet.main --dev-panel  # 桌宠 + 面板同屏
-python tools/cord\\\_diag.py                # 缆线长度/拉伸数字
+python -m iterator_pet.main --dev-panel  # 桌宠 + 面板同屏
+python tools/cord_diag.py                # 缆线长度/拉伸数字
 ```
+
+### 打包
+
+见 `packaging/build.cmd`（PyInstaller onedir，产物 `dist/五块卵石/启动.exe`）。
 
 |工具|用途|
 |-|-|
 |`tools/selftest.py`|不依赖 Qt 的冒烟测试|
-|`tools/smoke\\\_window.py`|真实窗口短跑并截图|
+|`tools/smoke_window.py`|真实窗口短跑并截图|
 |`tools/crop.py`|放大截取局部，用于像素级判断|
-|`tools/puppet\\\_portrait.py`|人偶 1:1 特写|
-|`tools/leg\\\_visibility.py`|腿是否被袍子挡住的计算|
-|`tools/asset\\\_sheet.py`|抽取到的图元联络表|
-|`tools/probe\\\_assets.py`|只读探测本机游戏安装|
+|`tools/puppet_portrait.py`|人偶 1:1 特写|
+|`tools/leg_visibility.py`|腿是否被袍子挡住的计算|
+|`tools/asset_sheet.py`|抽取到的图元联络表|
+|`tools/probe_assets.py`|只读探测本机游戏安装|
 |`tools/replay.py`|定帧率确定性回放|
-|`tools/roam\\\_report.py`|漫游覆盖率 / 基座分布|
-|`tools/cord\\\_diag.py`, `tools/cord\\\_fold.py`|缆线长度与折叠诊断|
+|`tools/roam_report.py`|漫游覆盖率 / 基座分布|
+|`tools/cord_diag.py`, `tools/cord_fold.py`|缆线长度与折叠诊断|
 
 ## 已知BUG
 
@@ -66,5 +88,4 @@ python tools/cord\\\_diag.py                # 缆线长度/拉伸数字
 代码以 MIT 许可发布（见 `LICENSE`）。Rain World 及其全部美术、音频、代码版权归 **Videocult / Akupara Games**
 所有；本仓库不含任何游戏素材，仅在运行时从用户本机安装读取基础图元。
 
-受https://github.com/lingxiaojun/slugcatpet/启发，参考了这个项目的桌宠行为。
-
+受https://github.com/lingxiaojun/slugcatpet/ 启发，参考了这个项目的桌宠行为。
