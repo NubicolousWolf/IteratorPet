@@ -74,6 +74,13 @@ class PetTray(QSystemTrayIcon):
         self._speed_menu = speed_menu
 
         menu.addSeparator()
+        self.action_dev = QAction("开发者面板", menu)
+        self.action_dev.setCheckable(True)
+        self._on_dev_panel = None
+        self.action_dev.triggered.connect(self._toggle_dev_panel)
+        menu.addAction(self.action_dev)
+
+        menu.addSeparator()
         action_quit = QAction("退出", menu)
         action_quit.triggered.connect(self.window.close)
         menu.addAction(action_quit)
@@ -81,6 +88,16 @@ class PetTray(QSystemTrayIcon):
         self._menu = menu
         self.setContextMenu(menu)
         self.activated.connect(self._on_activated)
+
+    def attach_dev_panel(self, callback) -> None:
+        """``callback() -> bool`` (visible after the toggle). Without it the item is inert."""
+        self._on_dev_panel = callback
+
+    def _toggle_dev_panel(self) -> None:
+        if self._on_dev_panel is None:
+            self.action_dev.setChecked(False)
+            return
+        self.action_dev.setChecked(bool(self._on_dev_panel()))
 
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:

@@ -126,6 +126,8 @@ class SimulationState:
         self.consistent_base_pos = 0
         self._dest_version = self.wander.version
         self._last_chunk0 = self.wander.current
+        self.last_body_speed = 0.0
+        self.last_goal = self.wander.current
 
         base_pose = self.rail.pose(self.frame_pos)
         self.arm = ArmChain(base_pose.point)
@@ -236,6 +238,7 @@ class SimulationState:
         # so measure that: tick-to-tick body speed.
         body_speed = C.dist(self._last_chunk0, self.creature.chunk0)
         self._last_chunk0 = self.creature.chunk0
+        self.last_body_speed = body_speed
         settled = body_speed < C.WANDER_SETTLED_SPEED
         self.wander.update(self.cursor, settled=settled)
         get_to = self.wander.get_to()
@@ -345,6 +348,7 @@ class SimulationState:
         # The destination was already clamped when it was picked, so ``get_to`` is
         # reachable; only the room has the last word (ClampVectorInRoom).
         get_to = self._clamp_to_room(get_to)
+        self.last_goal = get_to
         self.creature.step(get_to, get_to_dir, look_point)
         self.arm.update(
             pose.point, self.creature.chunk0, self.creature.chunk1,
@@ -479,15 +483,62 @@ class SimulationState:
 
     # -- diagnostics -------------------------------------------------------
     def status(self) -> dict:
+        """Everything a human needs to see why the pet is doing what it is doing.
+
+        Cheap enough to call at 12 Hz from the developer panel; also used by the
+        tools. Keep the keys stable -- ``tools/devpanel.py`` formats them.
+        """
         ok_arm, arm_stretch, _ = self.arm.validate()
+        cord_all, cord_free = self.cord.stretch()
+        base_point = self.rail.pose(self.frame_pos).point
+        body = self.creature.chunk0
+        gap = C.dist(base_point, body)
+        reach = sum(C.ARM_LENGTHS)
+        down = self.creature.body_dir
+        tilt = abs(180.0 - abs(degrees(atan2(down[0], down[1]))))
+        worst_filament = max(
+            (drawn / max(1e-9, free)
+             for drawn, free in (self.cord.filament_rope(i)
+                                 for i in range(len(self.cord.small)))),
+            default=0.0,
+        )
         return {
             "ticks": self.ticks,
-            "frame_pos": round(self.frame_pos, 3),
+            "time": round(self.time, 2),
             "behaviour": self.behaviour,
+            "scores": {k: round(v, 3) for k, v in self.selector.last_scores.items()},
+            # How long the current state has been held. Without this a panel can
+            # legitimately show "behaviour roaming (best: talk)" and look broken:
+            # the challenger did win on score but the minimum dwell has not run
+            # out yet.
+            "held_ticks": self.selector.ticks,
+            "min_hold": C.BEHAVIOUR_MIN_TICKS,
+            "cursor": self.cursor,
+            "still_ticks": self.selector.still_ticks,
+            "frame_pos": round(self.frame_pos, 3),
+            "station_edge": ("top", "right", "bottom", "left")[int(self.frame_pos) % 4],
             "base_moving": self.base_moving,
+            "start_threshold": round(self.start_threshold, 1),
+            "stop_threshold": round(self.stop_threshold, 1),
+            "base_body": round(gap, 1),
+            "reach": reach,
+            "reach_ratio": round(gap / reach, 3),
+            "body_speed": round(self.last_body_speed, 2),
+            "tilt_deg": round(tilt, 1),
+            # The goal actually being chased. During investigate/talk this is NOT
+            # ``wander.next`` -- showing the wander's stale destination made the
+            # panel read "dist 297 progress 1.00" while the pet was circling the
+            # cursor, which is exactly the kind of lie a dev tool must not tell.
+            "goal": self.last_goal,
+            "goal_distance": round(C.dist(body, self.last_goal), 1),
+            "dest": self.wander.next,
+            "progress": (round(self.wander.progress, 3)
+                         if self.behaviour == "roaming" else None),
             "arm_stretch": round(arm_stretch, 2),
-            "cord_stretch": round(self.cord.stretch()[0], 3),
-            "cord_stretch_free": round(self.cord.stretch()[1], 3),
+            "cord_nodes": len(self.cord.nodes),
+            "cord_stretch": round(cord_all, 3),
+            "cord_stretch_free": round(cord_free, 3),
+            "filament_worst": round(worst_filament, 2),
             "finite": self.cord.finite(),
             "arm_ok": ok_arm,
         }

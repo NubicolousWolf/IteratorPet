@@ -65,6 +65,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-click-through", action="store_true")
     parser.add_argument("--no-tray", action="store_true", help="do not create a tray icon")
     parser.add_argument(
+        "--dev-panel", action="store_true",
+        help="open the developer diagnostics panel (off by default)",
+    )
+    parser.add_argument(
         "--sprites",
         metavar="DIR",
         default=None,
@@ -105,17 +109,46 @@ def main(argv: list[str] | None = None) -> int:
     window.show()
     window.raise_()
 
+    # The panel talks to the same simulation the canvas draws. It is a Tool
+    # window: it never takes focus and never feeds anything back.
+    panel = None
+    if args.dev_panel:
+        from .platform.devpanel import DevPanel
+
+        panel = DevPanel(window.simulation)
+        panel.refresh()
+        panel.show()
+
     tray = None
     if not args.no_tray:
         from PySide6.QtWidgets import QSystemTrayIcon
 
         if QSystemTrayIcon.isSystemTrayAvailable():
             tray = PetTray(window, cfg, on_config_changed=lambda: None)
+            tray.attach_dev_panel(lambda: _toggle_panel(window))
             tray.show()
             window.closed.connect(tray.hide)
 
     window.closed.connect(app.quit)
+    if panel is not None:
+        window.closed.connect(panel.close)
     return app.exec()
+
+
+def _toggle_panel(window):
+    """Show/hide the developer panel from the tray menu."""
+    from .platform.devpanel import DevPanel
+
+    panel = getattr(window, "_dev_panel", None)
+    if panel is None:
+        panel = DevPanel(window.simulation)
+        setattr(window, "_dev_panel", panel)
+    panel.refresh()
+    if panel.isVisible():
+        panel.hide()
+    else:
+        panel.show()
+    return panel.isVisible()
 
 
 if __name__ == "__main__":

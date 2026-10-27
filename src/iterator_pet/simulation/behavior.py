@@ -215,6 +215,9 @@ class BehaviourSelector:
         self.ticks = 0
         self.still_ticks = 0
         self._last_cursor: tuple[float, float] | None = None
+        # Last computed scores, for the developer panel (and for explaining a
+        # switch after the fact). Never read by the simulation itself.
+        self.last_scores: dict[str, float] = {}
 
     # -- inputs ------------------------------------------------------------
     def observe_cursor(self, cursor: tuple[float, float] | None) -> float:
@@ -274,6 +277,7 @@ class BehaviourSelector:
 
     def choose(self, body, cursor, cursor_speed: float, talk_distance: float) -> str:
         scores = self.scores(body, cursor, cursor_speed, talk_distance)
+        self.last_scores = scores
         if self.ticks < C.BEHAVIOUR_MIN_TICKS:
             self.ticks += 1
             return self.behaviour

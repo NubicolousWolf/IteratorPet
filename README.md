@@ -44,7 +44,9 @@ $env:RAINWORLD_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
 python -m pytest -q                      # 38 项测试
 python tools/selftest.py                 # 无依赖烟雾测试
 python tools/puppet_portrait.py          # 1:1 人偶特写
-python tools/roam_report.py 10           # 10 分钟漫游统计
+python tools/roam_report.py 10           # 10 分钟漫游统计（行为占比 / 覆盖）
+python tools/devpanel.py --cursor sweep  # 开发者面板：实时看行为、分数、臂展、缆线拉伸
+python -m iterator_pet.main --dev-panel  # 桌宠 + 面板同屏
 python tools/cord_diag.py                # 缆线长度/拉伸数字
 ```
 
