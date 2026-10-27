@@ -37,19 +37,25 @@ def dev_lines(simulation) -> list[str]:
     """
     s = simulation.status()
     cursor = s["cursor"]
-    scores = s["scores"] or {}
+    weights = s["weights"] or {}
     order = ("roaming", "investigate", "talk")
-    winner = max(scores, key=lambda k: scores[k]) if scores else "-"
+    leader = max(weights, key=lambda k: weights[k]) if weights else "-"
 
     rows: list[tuple[str, str]] = [
         ("tick / time", f'{s["ticks"]}  {s["time"]:.1f}s'),
-        ("behaviour", f'{s["behaviour"]}   (best: {winner})'
-                      f'  held {s["held_ticks"]}/{s["min_hold"]}t'),
-        ("", "  ".join(f"{name[:4]} {scores.get(name, 0):.2f}" for name in order)),
-        ("", "  ".join(f"{name[:4]} fresh {s['freshness'].get(name, 0):.2f}"
-                       for name in order)),
+        # "heaviest" is the weight leader, which need not be the state that is
+        # running: the draw happened at the last boundary, and the weights have
+        # been drifting since. That is what the weight row below is for.
+        ("behaviour", f'{s["behaviour"]}  (lead {leader})'
+                      f'  {s["held_ticks"]}/{s["segment"]}t'),
+        ("weights", "  ".join(f"{name[:4]} {weights.get(name, 0):.2f}" for name in order)),
+        ("freshness", "  ".join(f"{name[:4]} {s['freshness'].get(name, 0):.2f}"
+                                for name in order)),
+        ("draws", f'{s["draws"]}  eligible '
+                  f'{", ".join(s["eligible"]) or "-"}'),
         ("cursor", "none" if cursor is None
-         else f'({cursor[0]:.0f}, {cursor[1]:.0f})  still {s["still_ticks"]}t'),
+         else f'({cursor[0]:.0f}, {cursor[1]:.0f})  still {s["still_ticks"]}t'
+              + (f'  cd {s["talk_cooldown"]}t' if s["talk_cooldown"] else "")),
         ("", ""),
         ("carriage", f'framePos {s["frame_pos"]:.2f}  edge {s["station_edge"]}'),
         ("", f'moving {s["base_moving"]}   start/stop '
@@ -84,7 +90,10 @@ class DevPanel(QWidget):
         self.setWindowTitle("Iterator Pet - dev")
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.resize(430, 330)
+        # Wide enough for the two 3-number rows (weights / freshness) at the
+        # 1.5x DPI this machine runs: at 430 px the freshness row was clipped at
+        # "talk fresh", i.e. the panel was silently hiding a number.
+        self.resize(470, 340)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(max(16, int(1000.0 / max(1.0, refresh_hz))))

@@ -199,8 +199,9 @@ def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
 
 
+
 class BehaviourSelector:
-    """``roaming`` / ``investigate`` / ``talk`` chosen by utility score.
+    """``roaming`` / ``investigate`` / ``talk`` chosen by a weighted draw.
 
     DESIGN ADDITION. The source switches these states from story actions, never
     from a score (see the block comment in ``constants.py``). What IS borrowed
@@ -208,24 +209,44 @@ class BehaviourSelector:
     ``cursor + DegToVec(angle) * 150`` with the angle sweeping inside +-70 deg
     (ss.cs:4174-4204), and Talk parks at a fixed distance from the player the way
     ``CommunicatePosScore`` does (ss.cs:4278-4285). Only the selector is ours.
+
+    WHY A DRAW AND NOT AN ARGMAX (2026-10-27, user's item 4). "roaming should
+    stay the most likely behaviour even with a mouse on screen" cannot be
+    expressed by taking the maximum of three numbers: a base score big enough to
+    win most ticks wins EVERY tick, and the state the user actually saw -- a
+    parked cursor producing 68 % talk -- is the other side of the same coin. So
+    the selector borrows slugcatpet's ``MoodArbiter`` (``brain/desire.py``): each
+    mood has a draw weight, a segment has a length, and the next mood is drawn by
+    roulette. Freshness survives, but as a multiplier that only ever DAMPS the
+    mood that has just been running, so no state can make itself stickier by
+    being held (the ratchet in AGENTS 6.4 stays structurally impossible).
+
+    The one deterministic rule is ``BEHAVIOUR_MIN_TICKS``: a draw happens only at
+    a segment boundary, and no boundary may land sooner than 2 s, otherwise the
+    pose stutters every time the mouse twitches.
     """
 
-    def __init__(self):
+    def __init__(self, seed: int = 20261027):
         self.behaviour = "roaming"
         self.ticks = 0
         self.still_ticks = 0
         self._last_cursor: tuple[float, float] | None = None
-        # Freshness per behaviour: 1 = keen, 0 = fed up. Decays while the
-        # behaviour is active and recovers while it is not, and the score is
-        # multiplied by it -- see ``constants.SCORE_FRESHNESS_DECAY``.
+        # Freshness: 1 = keen, 0 = fed up. Decays while the mood is active,
+        # recovers while it is not, and multiplies that mood's draw weight.
         self.freshness: dict[str, float] = {name: 1.0 for name in C.BEHAVIOURS}
-        # Last computed scores, for the developer panel (and for explaining a
-        # switch after the fact). Never read by the simulation itself.
-        self.last_scores: dict[str, float] = {}
+        # "暂定为一分钟冷却": ticks until talk may be drawn again.
+        self.talk_cooldown = 0
+        self.rng = random.Random(seed)
+        # Diagnostics, for the developer panel and for explaining a draw after
+        # the fact. Never read by the simulation itself.
+        self.weights: dict[str, float] = {}
+        self.eligible: tuple[str, ...] = ()
+        self.draws = 0
+        self.last_roll: tuple[float, float] | None = None
 
     # -- inputs ------------------------------------------------------------
     def observe_cursor(self, cursor: tuple[float, float] | None) -> float:
-        """Update the stillness counter; return the cursor's speed in px/tick."""
+        """Update the hover counter; return the cursor's speed in px/tick."""
         if cursor is None:
             self.still_ticks = 0
             self._last_cursor = None
@@ -235,30 +256,44 @@ class BehaviourSelector:
         else:
             speed = C.dist(cursor, self._last_cursor)
         self._last_cursor = cursor
-        if speed < C.SCORE_MOTION_MIN:
+        # ONE threshold for both states (user: "判据统一成 0 px/tick"). A cursor
+        # that moved at all is moving; a cursor that did not move at all is
+        # hovering. There is no band in which both are true.
+        if speed <= C.SCORE_MOTION_MIN:
             self.still_ticks += 1
         else:
             self.still_ticks = 0
         return speed
 
-    # -- freshness ---------------------------------------------------------
+    # -- gates -------------------------------------------------------------
+    def gate(self, name: str, body, cursor, cursor_speed: float) -> bool:
+        """Can this mood start a segment right now?"""
+        if name not in C.BEHAVIOURS:
+            raise KeyError(name)
+        if cursor is None:
+            # The source's Idle: with no player, ``Move()`` (ss.cs:4110) ignores
+            # everything but the marbles. Roaming is the only portable state.
+            return name == "roaming"
+        if name == "roaming":
+            return True
+        if name == "investigate":
+            # ss.cs:4174 -- investigate is triggered by the player doing
+            # something. A cursor that has not moved this tick is not something
+            # to inspect; it is something to talk at.
+            return cursor_speed > C.SCORE_MOTION_MIN
+        # talk
+        return (cursor_speed <= C.SCORE_MOTION_MIN
+                and self.talk_cooldown <= 0
+                and C.dist(body, cursor) <= C.SCORE_TALK_RANGE)
+
+    def talk_gain(self) -> float:
+        """"talk 概率随鼠标悬停时间增加而增大" -- a ramp, not a threshold."""
+        ramp = min(1.0, self.still_ticks / C.TALK_HOVER_FULL_TICKS)
+        return C.TALK_GAIN_MIN + (C.TALK_GAIN_MAX - C.TALK_GAIN_MIN) * ramp
+
+    # -- freshness / cooldowns --------------------------------------------
     def tick_freshness(self) -> None:
-        """Drain the active behaviour's freshness, recover every other one.
-
-        DESIGN ADDITION. A desktop pet repeats activities, so it needs a cooldown;
-        the source never does, so it has none. This is slugcatpet's
-        ``MoodArbiter.tick_freshness`` (``brain/desire.py``) with the gate turned
-        into a multiplier -- this selector still takes the argmax, and whether to
-        draw at random among eligible candidates instead is an open question
-        (``docs/ROADMAP.md`` item 4).
-
-        The invariant it buys: a behaviour's own score decays while it is held,
-        and every rival's recovers, so no state can be absorbing. The previous
-        ``bored`` term did the opposite -- it was added to the incumbent's score
-        *and* multiplied a rival's score by ``1 - bored``, which made a long
-        roaming stretch permanently unbeatable (measured: talk pinned at 0.00 for
-        the rest of the session after 15 s without a cursor).
-        """
+        """Drain the active mood's freshness, recover every other one."""
         for name in C.BEHAVIOURS:
             if name == self.behaviour:
                 self.freshness[name] = max(
@@ -266,74 +301,87 @@ class BehaviourSelector:
             else:
                 self.freshness[name] = min(
                     1.0, self.freshness[name] + C.SCORE_FRESHNESS_RECOVER)
+        if self.talk_cooldown > 0:
+            self.talk_cooldown -= 1
 
-    # -- scoring -----------------------------------------------------------
-    def scores(self, body, cursor, cursor_speed: float, talk_distance: float) -> dict[str, float]:
-        """Instantaneous utility per behaviour, already scaled by freshness."""
-        if cursor is None:
-            # No player. ``SSOracleBehavior.Move`` (ss.cs:4110) then runs Idle and
-            # has nothing else to do, so the base utilities are these; ``choose``
-            # treats the case as a hard rule because an all-zero tie must not be
-            # able to freeze whatever state happened to be active.
-            base = {"roaming": C.W_ROAMING_BASE, "investigate": 0.0, "talk": 0.0}
-        else:
-            distance = C.dist(body, cursor)
-            near = max(0.0, 1.0 - distance / C.SCORE_NEAR_RANGE)
-            motion = min(1.0, cursor_speed / C.SCORE_MOTION_SPEED)
-            still = min(1.0, self.still_ticks / C.SCORE_STILL_TICKS)
-            # Talking is about the cursor being NEARBY -- the body then travels to
-            # the talk distance and holds there -- not about already being at it
-            # (that would never trigger: the pet would have to guess the right
-            # radius first).
-            talk_near = max(0.0, 1.0 - distance / C.SCORE_TALK_RANGE)
-            base = {
-                # Investigate is about MOTION (the source triggers it when the
-                # player does something, ss.cs:4174) and a cursor that has not
-                # moved AT ALL is nothing to investigate. Proximity alone used to
-                # keep this at 0.386 next to a parked mouse -- close to talk's
-                # own score -- which is the opposite of what the three comments
-                # around it claimed. Whether the cursor is *still enough* to talk
-                # at is a separate, softer threshold (``still_ticks``, 1 px/tick),
-                # so any real motion keeps investigate fully available.
-                "investigate": ((C.W_INVESTIGATE_NEAR * near
-                                 + C.W_INVESTIGATE_MOTION * motion)
-                                if cursor_speed > 0.0 else 0.0),
-                # Talking needs the cursor to SETTLE; a cursor that is moving
-                # around is something to investigate, not to talk at. The
-                # stillness factor is multiplicative so a moving cursor kills the
-                # talk score outright.
-                "talk": (C.W_TALK_DISTANCE * (0.45 + 0.55 * talk_near)
-                         * (0.35 + 0.65 * still)),
-                # Roaming is the resting state and the default.
-                "roaming": C.W_ROAMING_BASE,
-            }
-        return {name: base[name] * self.freshness[name] for name in C.BEHAVIOURS}
+    # -- the draw ----------------------------------------------------------
+    def weights_for(self, body, cursor, cursor_speed: float) -> dict[str, float]:
+        """Draw weight per mood, zero for the ones whose gate is shut.
 
-    def choose(self, body, cursor, cursor_speed: float, talk_distance: float) -> str:
+        ``freshness`` damps the weight but never zeroes it (``FRESHNESS_FLOOR``):
+        the only thing that can forbid a mood is its gate. Ordering matters --
+        without the floor the mood that just used up its segment is at 0.06 and
+        its rival at 1.0, so every boundary is decided by the durations alone and
+        the draw is decoration.
+        """
+        weights = {}
+        for name in C.BEHAVIOURS:
+            if not self.gate(name, body, cursor, cursor_speed):
+                weights[name] = 0.0
+                continue
+            gain = self.talk_gain() if name == "talk" else 1.0
+            damp = (C.FRESHNESS_FLOOR
+                    + (1.0 - C.FRESHNESS_FLOOR) * self.freshness[name])
+            weights[name] = C.BEHAVIOUR_BASE[name] * gain * damp
+        return weights
+
+    def _draw(self, body, cursor, cursor_speed: float, exclude: str | None = None) -> None:
+        """Roulette over the eligible moods; the one that just ended hands over.
+
+        ``exclude`` is the mood whose segment has just run out. Without it a mood
+        could re-draw itself and the segment length would be a lie: talk measured
+        runs of 800, 1600 and 2400 ticks, and because the 60 s cooldown is only
+        started when something ELSE is drawn, a self-renewing conversation never
+        started its cooldown at all (measured: 28.7 % talk instead of 25 %).
+        Roaming is exempt -- it is the source's Idle, the state the pet is in when
+        there is nothing else to do, and it has to be able to simply continue.
+        """
+        weights = self.weights_for(body, cursor, cursor_speed)
+        if exclude is not None and exclude != "roaming":
+            weights[exclude] = 0.0
+        eligible = tuple(name for name in C.BEHAVIOURS if weights[name] > 0.0)
+        winner = None
+        total = sum(weights[name] for name in eligible)
+        if eligible and total > 0.0:
+            roll = self.rng.random() * total
+            self.last_roll = (roll, total)
+            acc = 0.0
+            for name in eligible:
+                acc += weights[name]
+                if roll <= acc:
+                    winner = name
+                    break
+            if winner is None:
+                winner = eligible[-1]
+        if winner is None:
+            # Nothing is eligible (talk cooling down, cursor still, roaming
+            # drained). The source's Idle is the resting state, so this is not a
+            # tie-break -- it is the floor of the state machine.
+            winner = "roaming"
+        self.weights = weights
+        self.eligible = eligible
+        self.draws += 1
+        if self.behaviour == "talk" and winner != "talk":
+            self.talk_cooldown = C.TALK_COOLDOWN_TICKS
+        self.behaviour = winner
+        self.ticks = 1
+
+    def _segment_ended(self, body, cursor, cursor_speed: float) -> bool:
+        if not self.gate(self.behaviour, body, cursor, cursor_speed):
+            return True
+        return self.ticks >= C.BEHAVIOUR_SEGMENT_TICKS[self.behaviour]
+
+    # -- per tick ----------------------------------------------------------
+    def choose(self, body, cursor, cursor_speed: float) -> str:
         self.tick_freshness()
-        scores = self.scores(body, cursor, cursor_speed, talk_distance)
-        self.last_scores = scores
-        # The dwell gate comes FIRST, before even the no-cursor rule: a state that
-        # was just entered must not be yanked away on the next tick, or the pet
-        # stutters between poses whenever the situation alternates.
+        self.weights = self.weights_for(body, cursor, cursor_speed)
+        self.eligible = tuple(name for name in C.BEHAVIOURS
+                              if self.weights[name] > 0.0)
         if self.ticks < C.BEHAVIOUR_MIN_TICKS:
             self.ticks += 1
             return self.behaviour
-        if cursor is None:
-            # Hard rule, not a score: with no player the source is in Idle. Letting
-            # the scores decide here would hand the decision to a three-way tie of
-            # zeros whenever roaming's freshness happened to be drained.
-            if self.behaviour != "roaming":
-                self.behaviour = "roaming"
-                self.ticks = 0
-            else:
-                self.ticks += 1
-            return self.behaviour
-        best = max(scores, key=lambda name: scores[name])
-        if (best != self.behaviour
-                and scores[best] > scores[self.behaviour] + C.BEHAVIOUR_SWITCH_MARGIN):
-            self.behaviour = best
-            self.ticks = 0
+        if self._segment_ended(body, cursor, cursor_speed):
+            self._draw(body, cursor, cursor_speed, exclude=self.behaviour)
         else:
             self.ticks += 1
         return self.behaviour

@@ -26,7 +26,9 @@ def test_status_reports_everything_the_panel_needs():
     sim = _sim()
     status = sim.status()
     for key in (
-        "ticks", "time", "behaviour", "scores", "freshness", "cursor", "still_ticks",
+        "ticks", "time", "behaviour", "weights", "eligible", "draws",
+        "talk_cooldown", "freshness", "cursor", "still_ticks",
+        "held_ticks", "min_hold", "segment",
         "frame_pos", "station_edge", "base_moving", "start_threshold",
         "stop_threshold", "base_body", "reach", "reach_ratio", "body_speed",
         "tilt_deg", "goal", "goal_distance", "dest", "progress",
@@ -39,17 +41,18 @@ def test_status_reports_everything_the_panel_needs():
     assert 0.0 <= status["reach_ratio"] < 2.0
 
 
-def test_the_panel_shows_the_behaviour_scores():
-    """A switch must be explainable: all three scores, with the winner named."""
+def test_the_panel_shows_the_draw_weights():
+    """A switch must be explainable: all three weights, and who could be drawn."""
     sim = _sim(600, cursor=(388.0, 207.0))
     text = "\n".join(dev_lines(sim))
     assert "behaviour" in text
     assert sim.behaviour in text
     assert "roam" in text and "inve" in text and "talk" in text
-    scores = sim.status()["scores"]
-    assert len(scores) == 3
-    for name, value in sim.selector.last_scores.items():
-        assert abs(scores[name] - value) < 5e-4, "status() must carry the live scores"
+    weights = sim.status()["weights"]
+    assert len(weights) == 3
+    for name, value in sim.selector.weights.items():
+        assert abs(weights[name] - value) < 5e-4, "status() must carry the live weights"
+    assert set(sim.status()["eligible"]) <= set(C.BEHAVIOURS)
 
 
 def test_the_panel_reports_the_goal_the_pet_is_actually_chasing():
@@ -83,5 +86,5 @@ def test_the_panel_flags_an_out_of_reach_body():
 def test_the_panel_is_readable_text_of_a_bounded_size():
     lines = dev_lines(_sim())
     assert 10 <= len(lines) <= 24
-    assert max(len(line) for line in lines) <= 64, "lines must fit a 430 px panel"
+    assert max(len(line) for line in lines) <= 58, "lines must fit the 470 px panel"
     assert all(isinstance(line, str) for line in lines)

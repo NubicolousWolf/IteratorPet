@@ -2,8 +2,8 @@
 
 ``rendering/canvas.py`` draws the simulation scaled by ``config.scale``, so the
 simulation's own frame is ``screen / scale``. Everything the simulation compares
-against the cursor -- ``SCORE_NEAR_RANGE``, ``SCORE_TALK_RANGE``, the 150 px
-investigate radius, ``TALK_DISTANCE_RATIO`` -- is in simulation pixels, so the
+against the cursor -- ``SCORE_TALK_RANGE``, ``TALK_DISTANCE``, the 150 px
+investigate radius -- is in simulation pixels, so the
 conversion belongs at the window boundary and nowhere else.
 
 Regression: ``_track_cursor`` used to hand ``mapFromGlobal()`` straight to

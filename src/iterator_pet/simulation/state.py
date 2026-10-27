@@ -275,9 +275,8 @@ class SimulationState:
         # The selector is OUR addition (see constants.py); the three poses are
         # the source's. ``get_to`` and the gaze are then re-derived per state.
         cursor_speed = self.selector.observe_cursor(self.cursor)
-        talk_distance = self.wander._safe_rect()[2] * C.TALK_DISTANCE_RATIO
         self.behaviour = self.selector.choose(
-            self.creature.chunk0, self.cursor, cursor_speed, talk_distance)
+            self.creature.chunk0, self.cursor, cursor_speed)
         if self.behaviour == "investigate" and self.cursor is not None:
             # ss.cs:4185-4188  angle inside +-70 deg, swept 0.4-0.8 deg/tick;
             # nextPos = player + DegToVec(angle) * 150.
@@ -295,14 +294,17 @@ class SimulationState:
             # ss.cs:4278-4285  CommunicatePosScore parks the iterator at a fixed
             # distance from the player. Commit to a POINT (re-picked only if the
             # cursor wanders off) so the body can arrive and rest instead of
-            # chasing a goal that slides every tick.
+            # chasing a goal that slides every tick. The distance is the constant
+            # ``C.TALK_DISTANCE`` = 76 sim px (three gown widths), NOT a fraction
+            # of the chamber -- a standoff that grows with the monitor is how the
+            # pet ended up talking from 236 px away.
             if (self._talk_point is None or self._talk_anchor is None
                     or C.dist(self.cursor, self._talk_anchor) > C.TALK_REPICK):
                 direction = C.dir_vec(self.cursor, self.creature.chunk0)
                 if direction == (0.0, 0.0):
                     direction = (0.0, 1.0)
-                self._talk_point = (self.cursor[0] + direction[0] * talk_distance,
-                                    self.cursor[1] + direction[1] * talk_distance)
+                self._talk_point = (self.cursor[0] + direction[0] * C.TALK_DISTANCE,
+                                    self.cursor[1] + direction[1] * C.TALK_DISTANCE)
                 self._talk_anchor = self.cursor
             get_to = self._talk_point
         else:
@@ -533,16 +535,22 @@ class SimulationState:
             "ticks": self.ticks,
             "time": round(self.time, 2),
             "behaviour": self.behaviour,
-            "scores": {k: round(v, 3) for k, v in self.selector.last_scores.items()},
-            # How long the current state has been held. Without this a panel can
-            # legitimately show "behaviour roaming (best: talk)" and look broken:
-            # the challenger did win on score but the minimum dwell has not run
-            # out yet.
+            # Draw weights: what the last/next draw was choosing between. This is
+            # the "probability" the selector talks about -- an argmax has no such
+            # thing, which is why the panel used to show a "best" that lost.
+            "weights": {k: round(v, 3) for k, v in self.selector.weights.items()},
+            "eligible": list(self.selector.eligible),
+            "draws": self.selector.draws,
+            "talk_cooldown": self.selector.talk_cooldown,
+            # How long the current state has been held, against the segment length
+            # it will serve. Without this the panel cannot say why a state that
+            # "should" have been replaced is still running.
             "held_ticks": self.selector.ticks,
             "min_hold": C.BEHAVIOUR_MIN_TICKS,
+            "segment": C.BEHAVIOUR_SEGMENT_TICKS[self.behaviour],
             # Freshness per behaviour. Without it a panel cannot explain why the
-            # pet dropped a behaviour it was enjoying -- the drained multiplier
-            # is the reason, and it is invisible in the scores alone.
+            # pet dropped (or ignored) a behaviour: a drained mood is invisible in
+            # the weights alone.
             "freshness": {k: round(v, 2) for k, v in self.selector.freshness.items()},
             "cursor": self.cursor,
             "still_ticks": self.selector.still_ticks,

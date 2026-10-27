@@ -29,7 +29,7 @@ def cursor_sim_point(
     pixels (``rendering/canvas.py``), so a screen offset has to be DIVIDED by
     ``scale`` before ``SimulationState.set_cursor`` sees it. Feeding screen
     pixels straight in -- which this used to do -- inflates every cursor
-    distance by ``scale`` (1.5x on this machine): ``SCORE_NEAR_RANGE`` only
+    distance by ``scale`` (1.5x on this machine): ``SCORE_TALK_RANGE`` only
     caught a cursor that was physically 1.5x closer than intended, and
     ``investigate`` aimed at ``cursor + 150 px`` measured in the wrong unit.
 

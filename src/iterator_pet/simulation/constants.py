@@ -186,42 +186,82 @@ CORD_PLATE2_SCALE = (0.4, 0.15)   # og.cs:949-950  (scaleX, scaleY)
 # sets ``movementBehavior`` from story actions (SeePlayer -> KeepDistance,
 # conversation -> Talk, pearl -> ShowMedia) and, when nothing is happening,
 # ``Move()`` (ss.cs:4110) runs Idle, which ignores the player entirely. A desktop
-# pet has no story, so the three portable states are selected by a utility
-# score. Every number below is OURS, not the game's.
+# pet has no story, so the three portable states are chosen by a WEIGHTED RANDOM
+# DRAW at segment boundaries (see ``behavior.BehaviourSelector``). Every number
+# below is OURS, not the game's.
 BEHAVIOURS = ("roaming", "investigate", "talk")
-BEHAVIOUR_MIN_TICKS = 80        # 2 s: no flip-flopping between states
-BEHAVIOUR_SWITCH_MARGIN = 0.08  # a challenger must clearly beat the incumbent
-# Score inputs, in sim px and px/tick (40 TPS -> 25 px/tick = 1000 px/s).
-SCORE_NEAR_RANGE = 420.0        # within this the cursor "is nearby"
-SCORE_MOTION_SPEED = 8.0        # px/tick (320 px/s): 'actively moving'
-# Below this the cursor counts as STILL, which is what ``observe_cursor`` measures
-# (it drives talk's stillness PREFERENCE). The investigate gate is a different,
-# looser test -- "did the cursor move at all this tick" -- because the source's
-# investigate trigger is the player doing *something* (ss.cs:4174), not the player
-# being nearly motionless. They are deliberately different thresholds: a 0.5 px/tick
-# drift is still enough to talk *at* and still counts as motion to investigate, and
-# the two scores then decide. (docs/PROPOSAL-behaviour.md item 4 may unify them.)
-SCORE_MOTION_MIN = 1.0          # 1 px/tick = 40 px/s
-SCORE_STILL_TICKS = 80          # 2 s without cursor movement = "still"
-SCORE_TALK_RANGE = 520.0        # how near the cursor has to be to bother talking
-# Weights.
-W_INVESTIGATE_NEAR = 0.60
-W_INVESTIGATE_MOTION = 0.50
-W_TALK_DISTANCE = 0.85
-W_ROAMING_BASE = 0.20
-# FRESHNESS -- the escape valve, and the only anti-lock mechanism.
-# Every behaviour owns a freshness in [0, 1]; doing it drains that freshness,
-# leaving it alone restores it, and its score is MULTIPLIED by it. A state can
-# therefore never hold forever: its own utility decays toward zero while its
-# rivals recover, so any rival with a positive base wins within a bounded number
-# of ticks. This replaces the old ``bored`` / ``since`` pair, which were ADDED to
-# the incumbent's own score and multiplied a rival's score by ``1 - bored`` --
-# a one-way ratchet. It locked the pet into perpetual roaming after ~12 s with no
-# way back: parking the cursor on the taskbar was enough (see AGENTS 6.4).
+BEHAVIOUR_MIN_TICKS = 80        # 2 s: a boundary may not flip the pose sooner
+# DRAW WEIGHTS -- what "roaming is the most likely behaviour" now literally is.
+# An argmax cannot express "probable": a base score high enough to win most ticks
+# wins *every* tick (talk never fires), and one low enough to lose sometimes loses
+# whenever the cursor shows up. That is why the old scorer sat at 68 % talk with
+# the cursor parked even though roaming had the highest base score.
+BEHAVIOUR_BASE = {"roaming": 1.00, "investigate": 0.55, "talk": 0.45}
+# How long one segment of each mood runs before the next draw, in ticks.
+#   roaming     450 = 11.25 s
+#   investigate 240 =   6 s
+#   talk        900 =  22.5 s
+# OURS, not the source's (the source has no moods at all). They are fitted, not
+# tasted: talk's 60 s cooldown is fixed by the user, so the split the user asked
+# for ("roaming 75 % while the cursor sits still") fixes the talk length as
+#     D / (D + 2400 + delay) = 0.25  ->  D ~= 900 ticks.
+# Measured with these numbers, 15 min, 8 seeds (_work/behaviour_probe.py):
+#   parked  roaming 75.0-76.2 %  talk 23.8-25.0 %
+#   sweep   roaming 72.7-78.0 %  investigate 22.0-27.3 %  talk 0 %
+BEHAVIOUR_SEGMENT_TICKS = {"roaming": 450, "investigate": 240, "talk": 900}
+# "暂定为一分钟冷却" (user, 2026-10-27): after a conversation ends the pet will not
+# start another one for a minute. 40 TPS -> 2400 ticks.
+TALK_COOLDOWN_TICKS = 2400
+# "talk 概率随鼠标悬停时间增加而增大": talk's draw weight is multiplied by a ramp
+# that starts at TALK_GAIN_MIN when the cursor has just stopped and reaches
+# TALK_GAIN_MAX after TALK_HOVER_FULL_TICKS of hovering. Measured P(talk wins the
+# draw | talk was eligible), 15 min, 8 seeds:
+#   hover 10-30 s   P = 0.43
+#   hover >= 90 s   P = 0.77
+# and the time from "the cursor stops" to the first conversation is median 17.5 s
+# (min 6.2, max 62.5, n=8) -- the pet is shy, not instant.
+TALK_GAIN_MIN = 0.10
+TALK_GAIN_MAX = 3.0
+TALK_HOVER_FULL_TICKS = 3600    # 90 s: the ramp is deliberately slow, so a mouse
+                                # that just stopped is not a conversation yet
+# The ONE motion threshold, in px/tick. Both states now read the same line, as the
+# user asked ("判据统一成 0 px/tick"): moving at all -> investigate is available,
+# exactly motionless -> talk is available. It used to be 1 px/tick for "still" and
+# >0 for "moving", so a 0.5 px/tick drift counted as BOTH and the scores broke
+# the tie on numbers nobody can see on screen.
+SCORE_MOTION_MIN = 0.0
+# Talk only starts if the cursor is within this distance of the BODY (sim px).
+# Beyond it the pet would have to walk two arm's lengths to reach a standoff
+# point it cannot support -- the same failure mode as ROADMAP 0.3.
+SCORE_TALK_RANGE = 520.0
+# FRESHNESS -- a recency dampener on the draw weight, and nothing more.
+# Every behaviour owns a freshness in [0, 1]; doing it drains that freshness and
+# leaving it alone restores it. It MULTIPLIES that behaviour's draw weight, so a
+# mood that has just used up a long segment is less likely to be drawn again --
+# but it can never forbid one (see FRESHNESS_FLOOR below), and it is NOT what
+# ends a segment: ``BEHAVIOUR_SEGMENT_TICKS`` does.
+# What it replaces: the old ``bored`` / ``since`` pair, which were ADDED to the
+# incumbent's own score and multiplied a rival's score by ``1 - bored`` -- a
+# one-way ratchet that locked the pet into perpetual roaming after ~12 s with no
+# way back (parking the cursor on the taskbar was enough; see AGENTS 6.4).
+# What it does NOT do: guarantee rotation. An earlier version of this comment
+# claimed a state "can never hold forever" because its utility decays toward zero
+# while rivals recover -- that was true of the argmax and is no longer the
+# mechanism. Rotation now comes from the segment length plus the hand-over rule
+# in ``BehaviourSelector._draw``.
 # The shape is borrowed from slugcatpet's ``MoodArbiter.tick_freshness``
 # (brain/desire.py), which decays the active activity and recovers the rest.
 SCORE_FRESHNESS_DECAY = 1.0 / 480.0    # 12 s of one behaviour drains it to 0
 SCORE_FRESHNESS_RECOVER = 1.0 / 240.0  # 6 s of not doing it refills it
+# Freshness damps a mood's draw weight but never zeroes it, so the ONLY thing
+# that can forbid a mood is its gate. Without this floor the mood that has just
+# finished a segment is always at 0.06 weight while its rival is at 1.0, so every
+# boundary is decided in advance by the durations. Measured before the floor: the
+# parked split was 76.2 / 23.8 on ALL EIGHT seeds (identical to a tenth of a
+# percent) and talk fired 6.2 s after the cursor stopped on 7 of 8 -- a draw that
+# cannot change the outcome is not a draw. With the floor the hover ramp is what
+# decides a boundary, and the split varies with the seed.
+FRESHNESS_FLOOR = 0.35
 # ss.cs:4174-4204  Investigate: player.DangerPos + DegToVec(angle) * 150f, with
 # the angle kept inside (-70, 70) and swept at 0.4-0.8 deg/tick, random sign.
 INVESTIGATE_RADIUS = 150.0
@@ -230,8 +270,16 @@ INVESTIGATE_ANGLE_SPEED_MIN = 0.4
 INVESTIGATE_ANGLE_SPEED_MAX = 0.8
 # ss.cs:4167-4170  KeepDistance samples a room point and commits to it; the Talk
 # branch of CommunicatePosScore parks the iterator ~250 px from the player in a
-# 1400 px room. Scaled to the safe-rect width for a desktop chamber.
-TALK_DISTANCE_RATIO = 0.25
+# 1400 px room -- 18 % of the room width, which on THIS chamber (1138 px) is
+# 236 px and reads as "it runs away from my mouse". The user asked for "three
+# puppets wide" instead, and measured on the live chamber the gown is 25.2 sim px
+# wide at the median (1200 ticks; max 38.9), so the standoff is
+#     3 x 25.2 = 76 sim px = 114 screen px at scale 1.5.
+# It is a CONSTANT in sim px, not a ratio of the chamber: a standoff that scales
+# with the room is 236 px on a 1138 px chamber and 194 px on a 776 px one, i.e.
+# "how far away it stands" would depend on the monitor, which is not a thing the
+# user asked for. Measure: `_work/talk_standoff.py`, docs/PROPOSAL-behaviour.md S1.1.
+TALK_DISTANCE = 76.0
 TALK_REPICK = 60.0              # re-pick the talk spot if the cursor moved this far
 
 SMALL_CORDS = 14
