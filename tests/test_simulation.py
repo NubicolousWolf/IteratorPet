@@ -155,3 +155,38 @@ def test_puppet_roams_the_whole_chamber():
     assert len(edges) == 4, f"carriage only visited edges {sorted(edges)}"
     reach = sum(C.ARM_LENGTHS)
     assert worst <= reach, f"puppet reached {worst:.0f} px from the carriage, arm is {reach:.0f}"
+
+
+def test_the_carriage_can_actually_leave_a_large_chamber():
+    """Regression for "roaming 下人偶不倾向于大范围移动，底座几乎不动".
+
+    The roaming test above only exercised 776x415, the chamber the README
+    documents. This machine runs ``scale = 1.5``, i.e. 1138x608, and there the two
+    constants contradicted each other:
+
+        start_threshold = 0.30 * diagonal        = 366 px
+        destination clamp = 0.62 * ARM (570 px)  = 353 px
+
+    Every destination is pulled inside 353 px of the carriage, so the puppet can
+    never reach the 366 px that would let the carriage start: it was pinned to a
+    353 px disc around a nail. Measured then -- carriage moving on 2 % of ticks
+    and driving 4 px/s, x coverage 53 %; now 43 % / 63 px/s / 77 %.
+
+    The structural half of this test (threshold < clamp radius) is what really
+    matters: it holds for ANY chamber size, including ones bigger than this.
+    """
+    clamp_radius = C.DESTINATION_REACH_RATIO * C.ARM_LENGTHS_TOTAL
+    for width, height in ((776.0, 415.0), (1138.0, 608.0)):
+        sim = SimulationState((0.0, 0.0, width, height))
+        assert sim.start_threshold < clamp_radius, (
+            f"{width:.0f}x{height:.0f}: start threshold {sim.start_threshold:.0f} px "
+            f">= destination clamp {clamp_radius:.0f} px -- the carriage can never move")
+
+        ticks = 40 * 120
+        moving = 0
+        for _ in range(ticks):
+            sim.step(0.025)
+            moving += int(sim.base_moving)
+        share = moving / ticks
+        assert share > 0.15, (
+            f"{width:.0f}x{height:.0f}: carriage moved on only {share:.0%} of ticks")

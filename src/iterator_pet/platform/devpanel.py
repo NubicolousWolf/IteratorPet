@@ -46,6 +46,8 @@ def dev_lines(simulation) -> list[str]:
         ("behaviour", f'{s["behaviour"]}   (best: {winner})'
                       f'  held {s["held_ticks"]}/{s["min_hold"]}t'),
         ("", "  ".join(f"{name[:4]} {scores.get(name, 0):.2f}" for name in order)),
+        ("", "  ".join(f"{name[:4]} fresh {s['freshness'].get(name, 0):.2f}"
+                       for name in order)),
         ("cursor", "none" if cursor is None
          else f'({cursor[0]:.0f}, {cursor[1]:.0f})  still {s["still_ticks"]}t'),
         ("", ""),

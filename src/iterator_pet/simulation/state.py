@@ -160,11 +160,24 @@ class SimulationState:
     def _refresh_thresholds(self) -> None:
         # oracle.cs:327 hard-codes 350 / 50 px for a 1400 px wide room; here they
         # are ratios of the chamber diagonal (0.30 / 0.036 -> ~264 / ~32 px on a
-        # 776x415 chamber). 0.30 rather than 0.40 so the carriage starts moving
-        # BEFORE the puppet leaves the 353 px arm's reach.
+        # 776x415 chamber).
+        #
+        # The start threshold is CAPPED by the destination clamp radius. This is
+        # structural, not taste: ``Wander.set_destination`` pulls every destination
+        # inside ``DESTINATION_REACH_RATIO * ARM_LENGTHS_TOTAL`` of the carriage
+        # (353 px), so a start threshold ABOVE that radius can never be crossed --
+        # the clamp always wins, the carriage never starts, and the puppet is
+        # pinned to a 353 px disc around a nail. That is exactly what happened at
+        # this machine's scale: 0.30 * 1220 = 366 px > 353 px, and the carriage
+        # measured 2 % moving ticks / 4 px/s against 31 % / 42 px/s in the
+        # documented 776x415 chamber.
         _, _, w, h = self._inset()
         span = hypot(w, h)
-        self.start_threshold = C.BASE_MOVE_START_RATIO * span
+        reach_radius = C.DESTINATION_REACH_RATIO * C.ARM_LENGTHS_TOTAL
+        self.start_threshold = min(
+            C.BASE_MOVE_START_RATIO * span,
+            C.BASE_MOVE_START_REACH_RATIO * reach_radius,
+        )
         self.stop_threshold = C.BASE_MOVE_STOP_RATIO * span
 
     def resize(self, bounds: tuple[float, float, float, float]) -> None:
@@ -175,6 +188,15 @@ class SimulationState:
         self._refresh_thresholds()
         self.frame_pos = self.rail.project(self.creature.chunk0)
         self._cur = self._compose()
+
+    @property
+    def bounds(self) -> tuple[float, float, float, float]:
+        """The chamber in SIMULATION pixels (``screen / config.scale``).
+
+        Everything the simulation stores -- body positions, destinations, and
+        the cursor from ``platform/pet_window.py`` -- lives in this frame.
+        """
+        return self._bounds
 
     # -- per tick ----------------------------------------------------------
     # -- external control (future drag & "move to point" features) ----------
@@ -513,6 +535,10 @@ class SimulationState:
             # out yet.
             "held_ticks": self.selector.ticks,
             "min_hold": C.BEHAVIOUR_MIN_TICKS,
+            # Freshness per behaviour. Without it a panel cannot explain why the
+            # pet dropped a behaviour it was enjoying -- the drained multiplier
+            # is the reason, and it is invisible in the scores alone.
+            "freshness": {k: round(v, 2) for k, v in self.selector.freshness.items()},
             "cursor": self.cursor,
             "still_ticks": self.selector.still_ticks,
             "frame_pos": round(self.frame_pos, 3),

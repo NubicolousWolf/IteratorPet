@@ -21,9 +21,31 @@ from iterator_pet.simulation.state import SimulationState
 
 MINUTES = float(sys.argv[1]) if len(sys.argv) > 1 else 10.0
 CURSOR = sys.argv[2] if len(sys.argv) > 2 else "none"
-SW, SH, ZOOM = 1707.0, 912.0, 2.2
+
+
+def _live_zoom() -> float:
+    """The chamber this desktop actually uses.
+
+    ``config.scale`` comes from ``%LOCALAPPDATA%/IteratorPet/config.json`` and is
+    what ``PetWindow`` divides the screen by. The old hard-coded 2.2 described a
+    776x415 chamber; this machine runs 1.5, i.e. 1138x608 -- and a behaviour
+    baseline measured in a chamber that does not exist on the target machine is
+    exactly how the "carriage never moves" defect (ROADMAP 0.1/1.2) survived a
+    whole round of reports.
+    """
+    try:
+        from iterator_pet.config import load
+
+        return max(0.3, min(4.0, float(load().scale)))
+    except Exception:
+        return 2.2
+
+
+SW, SH = 1707.0, 912.0
+ZOOM = float(sys.argv[3]) if len(sys.argv) > 3 else _live_zoom()
 bounds = (0.0, 0.0, SW / ZOOM, SH / ZOOM)
 x0, y0, w, h = bounds
+print(f"chamber {w:.0f}x{h:.0f} sim px  (screen {SW:.0f}x{SH:.0f}, scale {ZOOM})")
 
 sim = SimulationState(bounds)
 ticks = int(MINUTES * 60 * C.GAME_HZ)

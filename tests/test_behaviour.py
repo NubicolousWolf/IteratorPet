@@ -39,11 +39,27 @@ def test_no_cursor_means_roaming():
     assert set(history) == {"roaming"}
 
 
+def _dominant(history: list[str]) -> str:
+    """The state that holds the most ticks.
+
+    "Which state was active on tick 600" is a phase sample of a limit cycle, not
+    a verdict: with freshness in play the selector runs a cycle, and 600 ticks is
+    not a multiple of its period. Measured over 600 ticks: parked cursor ->
+    talk 439 / roam 161; sweeping cursor (amplitude 40) -> investigate 381 /
+    talk 139 / roam 80. The intent of these two tests is "this situation makes
+    that state WIN", which is a rate, so it is measured as one.
+    """
+    counts: dict[str, int] = {}
+    for name in history:
+        counts[name] = counts.get(name, 0) + 1
+    return max(counts, key=lambda name: counts[name])
+
+
 def test_a_parked_cursor_earns_talk():
     """Nearby and motionless is the Talk pose: hold a distance and keep looking."""
     cursor = (BODY[0] + 150.0, BODY[1])
     final, history = _drive(lambda tick: cursor)
-    assert final == "talk", f"ended in {final}"
+    assert _dominant(history) == "talk", f"ended in {final}; mix={sorted(history)}"
     assert history.count("talk") > 0.5 * len(history)
 
 
@@ -55,7 +71,7 @@ def test_a_moving_cursor_earns_investigate():
             return (BODY[0] + amplitude * sin(tick * 0.05), BODY[1])
 
         final, history = _drive(moving)
-        assert final == "investigate", f"amplitude {amplitude} ended in {final}"
+        assert _dominant(history) == "investigate", f"amplitude {amplitude} ended in {final}"
         assert history.count("investigate") > 0.5 * len(history)
 
 
@@ -74,6 +90,50 @@ def test_the_selector_does_not_flip_flop():
         else:
             assert run >= C.BEHAVIOUR_MIN_TICKS, f"switched after only {run} ticks"
             held, run = chosen, 1
+
+
+def test_a_taskbar_trip_does_not_lock_the_pet():
+    """Cursor to the taskbar and back: the pet has to look at it again.
+
+    Reported symptom: "鼠标挪到任务栏一会后再挪回来，似乎无法再检测到鼠标，
+    一直触发roaming". The window is ``availableGeometry()``, so a pointer in the
+    taskbar strip does read as "no cursor" -- that part is intended. What was not
+    was the score ratchet: 12 s of continuous roaming saturated ``bored``, which
+    both maxed roaming's own score (0.20 + 0.20 + 0.70 = 1.10) and multiplied
+    talk's by ``(1 - bored)`` = 0, so talk was pinned at exactly 0.00 for the rest
+    of the session and nothing could exceed 1.10 + margin. Measured: roaming
+    60 s out of 60, talk 0.00 throughout.
+    """
+    cursor = (BODY[0] + 150.0, BODY[1])
+    selector = BehaviourSelector()
+    for _ in range(40 * 15):                       # 15 s with the pointer away
+        selector.observe_cursor(None)
+        selector.choose(BODY, None, 0.0, TALK_DISTANCE)
+    assert selector.behaviour == "roaming"
+
+    history = []
+    for _ in range(40 * 30):                       # 30 s with it parked nearby
+        speed = selector.observe_cursor(cursor)
+        history.append(selector.choose(BODY, cursor, speed, TALK_DISTANCE))
+    assert "talk" in history, "the pet never looked at the cursor again"
+
+
+def test_no_behaviour_locks_in_for_good():
+    """Guard: whatever the pet is doing, 60 s of a parked cursor changes its mind.
+
+    This is the invariant the old ``bored`` ratchet broke for roaming. It is a
+    guard rather than the red-first reproduction (that is the taskbar test) --
+    investigate and talk were escapable by accident, through the opposite term.
+    """
+    cursor = (BODY[0] + 150.0, BODY[1])
+    for seed in C.BEHAVIOURS:
+        selector = BehaviourSelector()
+        selector.behaviour = seed
+        seen = set()
+        for _ in range(40 * 60):
+            speed = selector.observe_cursor(cursor)
+            seen.add(selector.choose(BODY, cursor, speed, TALK_DISTANCE))
+        assert len(seen) >= 2, f"{seed} was absorbing: only {seen} in 60 s"
 
 
 def test_the_state_and_the_gaze_reach_the_render_state():

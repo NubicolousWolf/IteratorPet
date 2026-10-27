@@ -115,6 +115,12 @@ ARM_MIN_LEN_STRAIGHT = 0.2  #                                    straight -> 0.2
 # arm's reach, instead of only after it has left it.
 BASE_MOVE_START_RATIO = 0.30   # puppet must stray this far before the base re-sites
 BASE_MOVE_STOP_RATIO = 0.036   # 50 / 1400
+# Hard ceiling on ``BASE_MOVE_START_RATIO * diagonal``, as a fraction of
+# ``DESTINATION_REACH_RATIO * ARM_LENGTHS_TOTAL`` (the destination clamp radius,
+# 353 px). A start threshold above that radius can NEVER be crossed -- every
+# destination is pulled inside it first -- so the carriage would never move. On
+# this machine's chamber the diagonal ratio is 366 px against a 353 px radius.
+BASE_MOVE_START_REACH_RATIO = 0.85
 BASE_MOVE_SPEED_DEG = 1.0      # Mathf.MoveTowardsAngle(..., 1f): 1 degree per tick
 BASE_STABLE_TICKS = 30         # consistentBasePosCounter > 30
 # Design addition (not in the source): the arm is 570 px, so the carriage must
@@ -185,19 +191,30 @@ BEHAVIOUR_SWITCH_MARGIN = 0.08  # a challenger must clearly beat the incumbent
 # Score inputs, in sim px and px/tick (40 TPS -> 25 px/tick = 1000 px/s).
 SCORE_NEAR_RANGE = 420.0        # within this the cursor "is nearby"
 SCORE_MOTION_SPEED = 8.0        # px/tick (320 px/s): 'actively moving'
+# Below this the cursor counts as STILL (same threshold in ``observe_cursor`` and
+# in the investigate gate, so "still" and "nothing to investigate" cannot drift
+# apart). 1 px/tick = 40 px/s.
+SCORE_MOTION_MIN = 1.0
 SCORE_STILL_TICKS = 80          # 2 s without cursor movement = "still"
 SCORE_TALK_RANGE = 520.0        # how near the cursor has to be to bother talking
-SCORE_SINCE_TICKS = 400         # 10 s: roaming gets restless
 # Weights.
 W_INVESTIGATE_NEAR = 0.60
 W_INVESTIGATE_MOTION = 0.50
 W_TALK_DISTANCE = 0.85
 W_ROAMING_BASE = 0.20
-W_ROAMING_SINCE = 0.20
-# Holding one pose forever is BORING: without this the pet locks into "talk"
-# next to a parked mouse (measured 2956/3000 ticks).
-W_ROAMING_BORED = 0.70
-SCORE_BORED_TICKS = 240         # 6 s in one state starts to get boring
+# FRESHNESS -- the escape valve, and the only anti-lock mechanism.
+# Every behaviour owns a freshness in [0, 1]; doing it drains that freshness,
+# leaving it alone restores it, and its score is MULTIPLIED by it. A state can
+# therefore never hold forever: its own utility decays toward zero while its
+# rivals recover, so any rival with a positive base wins within a bounded number
+# of ticks. This replaces the old ``bored`` / ``since`` pair, which were ADDED to
+# the incumbent's own score and multiplied a rival's score by ``1 - bored`` --
+# a one-way ratchet. It locked the pet into perpetual roaming after ~12 s with no
+# way back: parking the cursor on the taskbar was enough (see AGENTS 6.4).
+# The shape is borrowed from slugcatpet's ``MoodArbiter.tick_freshness``
+# (brain/desire.py), which decays the active activity and recovers the rest.
+SCORE_FRESHNESS_DECAY = 1.0 / 480.0    # 12 s of one behaviour drains it to 0
+SCORE_FRESHNESS_RECOVER = 1.0 / 240.0  # 6 s of not doing it refills it
 # ss.cs:4174-4204  Investigate: player.DangerPos + DegToVec(angle) * 150f, with
 # the angle kept inside (-70, 70) and swept at 0.4-0.8 deg/tick, random sign.
 INVESTIGATE_RADIUS = 150.0

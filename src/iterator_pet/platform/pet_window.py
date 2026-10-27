@@ -16,6 +16,38 @@ from .workspace import ScreenWorkspace
 from . import windows_overlay
 
 
+def cursor_sim_point(
+    global_pos,
+    origin,
+    screen_rect,
+    scale: float,
+    bounds: tuple[float, float, float, float],
+) -> tuple[float, float] | None:
+    """Map a global cursor position into SIMULATION coordinates, or ``None``.
+
+    The simulation runs in game pixels and ``scale`` maps those onto screen
+    pixels (``rendering/canvas.py``), so a screen offset has to be DIVIDED by
+    ``scale`` before ``SimulationState.set_cursor`` sees it. Feeding screen
+    pixels straight in -- which this used to do -- inflates every cursor
+    distance by ``scale`` (1.5x on this machine): ``SCORE_NEAR_RANGE`` only
+    caught a cursor that was physically 1.5x closer than intended, and
+    ``investigate`` aimed at ``cursor + 150 px`` measured in the wrong unit.
+
+    Containment is tested against the SCREEN, not the window. The pet window is
+    ``availableGeometry()``, so the taskbar strip (48 px tall here) read as "no
+    cursor at all" even with the mouse sitting in it; that forced the selector
+    into its no-cursor branch on every trip past the bottom edge. The point is
+    clamped into the chamber, which is where the game would put it as well.
+    """
+    if screen_rect is not None and not screen_rect.contains(global_pos):
+        return None
+    zoom = max(1e-6, float(scale))
+    x = (global_pos.x() - origin.x()) / zoom
+    y = (global_pos.y() - origin.y()) / zoom
+    bx, by, bw, bh = bounds
+    return (min(max(x, bx), bx + bw), min(max(y, by), by + bh))
+
+
 class PetWindow(PetCanvas):
     closed = Signal()
 
@@ -83,12 +115,16 @@ class PetWindow(PetCanvas):
 
     def _track_cursor(self) -> None:
         """Feed the global cursor position to the puppet so it can look at it."""
-        pos = QCursor.pos()
-        local = self.mapFromGlobal(pos)
-        if self.rect().contains(local):
-            self.simulation.set_cursor((float(local.x()), float(local.y())))
-        else:
-            self.simulation.set_cursor(None)
+        screen = self.screen()
+        self.simulation.set_cursor(
+            cursor_sim_point(
+                QCursor.pos(),
+                self.pos(),
+                screen.geometry() if screen is not None else None,
+                self.scale,
+                self.simulation.bounds,
+            )
+        )
 
     # -- controls ----------------------------------------------------------
     def toggle_pause(self) -> None:

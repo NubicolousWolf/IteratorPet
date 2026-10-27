@@ -215,6 +215,10 @@ class BehaviourSelector:
         self.ticks = 0
         self.still_ticks = 0
         self._last_cursor: tuple[float, float] | None = None
+        # Freshness per behaviour: 1 = keen, 0 = fed up. Decays while the
+        # behaviour is active and recovers while it is not, and the score is
+        # multiplied by it -- see ``constants.SCORE_FRESHNESS_DECAY``.
+        self.freshness: dict[str, float] = {name: 1.0 for name in C.BEHAVIOURS}
         # Last computed scores, for the developer panel (and for explaining a
         # switch after the fact). Never read by the simulation itself.
         self.last_scores: dict[str, float] = {}
@@ -231,55 +235,99 @@ class BehaviourSelector:
         else:
             speed = C.dist(cursor, self._last_cursor)
         self._last_cursor = cursor
-        if speed < 1.0:
+        if speed < C.SCORE_MOTION_MIN:
             self.still_ticks += 1
         else:
             self.still_ticks = 0
         return speed
 
+    # -- freshness ---------------------------------------------------------
+    def tick_freshness(self) -> None:
+        """Drain the active behaviour's freshness, recover every other one.
+
+        DESIGN ADDITION. A desktop pet repeats activities, so it needs a cooldown;
+        the source never does, so it has none. This is slugcatpet's
+        ``MoodArbiter.tick_freshness`` (``brain/desire.py``) with the gate turned
+        into a multiplier -- this selector still takes the argmax, and whether to
+        draw at random among eligible candidates instead is an open question
+        (``docs/ROADMAP.md`` item 4).
+
+        The invariant it buys: a behaviour's own score decays while it is held,
+        and every rival's recovers, so no state can be absorbing. The previous
+        ``bored`` term did the opposite -- it was added to the incumbent's score
+        *and* multiplied a rival's score by ``1 - bored``, which made a long
+        roaming stretch permanently unbeatable (measured: talk pinned at 0.00 for
+        the rest of the session after 15 s without a cursor).
+        """
+        for name in C.BEHAVIOURS:
+            if name == self.behaviour:
+                self.freshness[name] = max(
+                    0.0, self.freshness[name] - C.SCORE_FRESHNESS_DECAY)
+            else:
+                self.freshness[name] = min(
+                    1.0, self.freshness[name] + C.SCORE_FRESHNESS_RECOVER)
+
     # -- scoring -----------------------------------------------------------
     def scores(self, body, cursor, cursor_speed: float, talk_distance: float) -> dict[str, float]:
+        """Instantaneous utility per behaviour, already scaled by freshness."""
         if cursor is None:
-            return {"roaming": 1.0, "investigate": 0.0, "talk": 0.0}
-        distance = C.dist(body, cursor)
-        near = max(0.0, 1.0 - distance / C.SCORE_NEAR_RANGE)
-        motion = min(1.0, cursor_speed / C.SCORE_MOTION_SPEED)
-        still = min(1.0, self.still_ticks / C.SCORE_STILL_TICKS)
-        # Restlessness: measured from how long the CURRENT state has been held,
-        # not from cursor stillness. Keyed on stillness it only opened a 4 s
-        # window after the mouse stopped (measured: talk 294/4000 ticks) because
-        # ``bored`` hit 1 while the cursor was still parked. "I have been doing
-        # this a while, let me go and wander" is the behaviour we actually want.
-        bored = min(1.0, max(0.0, (self.ticks - C.SCORE_BORED_TICKS)
-                             / float(C.SCORE_BORED_TICKS)))
-        # Talking is about the cursor being NEARBY -- the body then travels to the
-        # talk distance and holds there -- not about already being at it (that
-        # would never trigger: the pet would have to guess the right radius first).
-        talk_near = max(0.0, 1.0 - distance / C.SCORE_TALK_RANGE)
-        since = min(1.0, self.ticks / C.SCORE_SINCE_TICKS)
-        return {
-            # Investigate is about MOTION (the source triggers it when the player
-            # does something, ss.cs:4174): urgency is proximity + movement, never
-            # stillness -- a still cursor belongs to ``talk``, and sharing the
-            # stillness term made the two states fight to a near-tie.
-            "investigate": (C.W_INVESTIGATE_NEAR * near
-                            + C.W_INVESTIGATE_MOTION * motion),
-            # Talking needs the cursor to SETTLE; a cursor that is moving around
-            # is something to investigate, not to talk at. The stillness factor
-            # is multiplicative so a moving cursor kills the talk score outright.
-            "talk": (C.W_TALK_DISTANCE * (0.45 + 0.55 * talk_near)
-                     * (0.35 + 0.65 * still) * (1.0 - bored)),
-            # Roaming wins by default and keeps winning the longer it has been
-            # ignored, so the pet never parks on the cursor forever.
-            "roaming": (C.W_ROAMING_BASE + C.W_ROAMING_SINCE * since
-                        + C.W_ROAMING_BORED * bored),
-        }
+            # No player. ``SSOracleBehavior.Move`` (ss.cs:4110) then runs Idle and
+            # has nothing else to do, so the base utilities are these; ``choose``
+            # treats the case as a hard rule because an all-zero tie must not be
+            # able to freeze whatever state happened to be active.
+            base = {"roaming": C.W_ROAMING_BASE, "investigate": 0.0, "talk": 0.0}
+        else:
+            distance = C.dist(body, cursor)
+            near = max(0.0, 1.0 - distance / C.SCORE_NEAR_RANGE)
+            motion = min(1.0, cursor_speed / C.SCORE_MOTION_SPEED)
+            still = min(1.0, self.still_ticks / C.SCORE_STILL_TICKS)
+            # Talking is about the cursor being NEARBY -- the body then travels to
+            # the talk distance and holds there -- not about already being at it
+            # (that would never trigger: the pet would have to guess the right
+            # radius first).
+            talk_near = max(0.0, 1.0 - distance / C.SCORE_TALK_RANGE)
+            base = {
+                # Investigate is about MOTION (the source triggers it when the
+                # player does something, ss.cs:4174) and a cursor that has not
+                # moved AT ALL is nothing to investigate. Proximity alone used to
+                # keep this at 0.386 next to a parked mouse -- close to talk's
+                # own score -- which is the opposite of what the three comments
+                # around it claimed. Whether the cursor is *still enough* to talk
+                # at is a separate, softer threshold (``still_ticks``, 1 px/tick),
+                # so any real motion keeps investigate fully available.
+                "investigate": ((C.W_INVESTIGATE_NEAR * near
+                                 + C.W_INVESTIGATE_MOTION * motion)
+                                if cursor_speed > 0.0 else 0.0),
+                # Talking needs the cursor to SETTLE; a cursor that is moving
+                # around is something to investigate, not to talk at. The
+                # stillness factor is multiplicative so a moving cursor kills the
+                # talk score outright.
+                "talk": (C.W_TALK_DISTANCE * (0.45 + 0.55 * talk_near)
+                         * (0.35 + 0.65 * still)),
+                # Roaming is the resting state and the default.
+                "roaming": C.W_ROAMING_BASE,
+            }
+        return {name: base[name] * self.freshness[name] for name in C.BEHAVIOURS}
 
     def choose(self, body, cursor, cursor_speed: float, talk_distance: float) -> str:
+        self.tick_freshness()
         scores = self.scores(body, cursor, cursor_speed, talk_distance)
         self.last_scores = scores
+        # The dwell gate comes FIRST, before even the no-cursor rule: a state that
+        # was just entered must not be yanked away on the next tick, or the pet
+        # stutters between poses whenever the situation alternates.
         if self.ticks < C.BEHAVIOUR_MIN_TICKS:
             self.ticks += 1
+            return self.behaviour
+        if cursor is None:
+            # Hard rule, not a score: with no player the source is in Idle. Letting
+            # the scores decide here would hand the decision to a three-way tie of
+            # zeros whenever roaming's freshness happened to be drained.
+            if self.behaviour != "roaming":
+                self.behaviour = "roaming"
+                self.ticks = 0
+            else:
+                self.ticks += 1
             return self.behaviour
         best = max(scores, key=lambda name: scores[name])
         if (best != self.behaviour
