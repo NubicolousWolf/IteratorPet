@@ -67,10 +67,10 @@ class ArmChain:
         the joint1 -> joint2 chord instead put the hook ~20 px away from where the
         game puts it.
 
-        ``flip`` is translated as ``-source_flip``: the game's ``DegToVec(a + d)``
-        rotates clockwise in its +y-UP frame, while ``C.inverse_kinematic`` offsets
-        along ``(-uy, ux)``, which is clockwise in this +y-DOWN frame -- mirroring
-        an axis reverses chirality, so the sign has to flip with it.
+        ``flip`` 直接就是源码那个 ``index % 2 == 0 ? 1f : -1f``，**不取负**：
+        ``C.inverse_kinematic`` 已经按 y 镜像帧实现（见它的 docstring，
+        以及 ``_work/source_ik_probe.py`` 的逐值核对）。2026-10-27 之前这里写的是
+        ``-source_flip``，把肘点画到弦的另一侧——缆线钩点因此一直挂在错误的一侧。
         """
         if not 0 <= index < len(self.joints) - 1:
             raise ValueError(
@@ -85,7 +85,7 @@ class ArmChain:
             joint.pos,
             joint.total_length / 3.0,
             joint.total_length * 2.0 / 3.0,
-            -source_flip,
+            source_flip,
         )
 
     # -- simulation --------------------------------------------------------
@@ -214,18 +214,9 @@ class ArmChain:
         nxt.pos = (nxt.pos[0] - back[0], nxt.pos[1] - back[1])
 
     # -- rendering helpers -------------------------------------------------
-    def elbow(self, index: int, body0: tuple[float, float]) -> tuple[float, float]:
-        """``Joint.ElbowPos`` - the bend point of the limb leaving ``index``."""
-        joint = self.joints[index]
-        if index < len(self.joints) - 1:
-            tip = self.joints[index + 1].pos
-            upper = joint.total_length / 3.0
-            fore = joint.total_length * 2.0 / 3.0
-        else:
-            tip = body0
-            upper = joint.total_length / 3.0
-            fore = joint.total_length / 3.0
-        return C.inverse_kinematic(joint.pos, tip, upper, fore, joint.flip)
+    # 2026-10-27 删掉 `ArmChain.elbow()`：全仓库无人调用，而且它用的是
+    # "端点传反 + joint.flip"的旧口径（会把肘点画偏 L/3）。要肘点请用
+    # `elbow_pos()`（缆线钩点）或 `renderer.drawn_elbow()`（绘制，含屏幕护栏）。
 
     def limb_tip(self, index: int, body0: tuple[float, float]) -> tuple[float, float]:
         if index < len(self.joints) - 1:

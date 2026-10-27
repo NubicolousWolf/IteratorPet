@@ -534,9 +534,15 @@ def test_cord_hooks_onto_joint_ones_elbow_not_joint_two():
     ``SetStuckSegments`` builds the hook from
     ``Lerp(myJoint.pos, myJoint.ElbowPos(1f, next.pos), 0.4f + 0.07f*i)``.
     ``ElbowPos`` is ``InverseKinematic(Tip=next.pos, vc=this.pos,
-    totalLength/3, totalLength*2/3, ...)``, so the elbow is **100 px** from joint 1
-    and **50 px** from joint 2 -- not joint 2 itself. Hooking onto the
-    joint1 -> joint2 chord put the cord ~20 px further down the arm.
+    totalLength/3, totalLength*2/3, ...)``, so the elbow is **50 px** from joint 2
+    (the ``Tip`` / start side) and **about 100 px** from joint 1 -- not joint 2
+    itself. Hooking onto the joint1 -> joint2 chord put the cord ~20 px further
+    down the arm.
+
+    2026-10-27：第二个距离的容差从 0.5 放宽到 2.0，因为源码的 IK 夹的是**余弦**
+    （``Clamp(cos, 0.2, 0.98)``）——链条完全拉直时 ``cos = 1`` 被夹到 0.98，肘点
+    必然外鼓一点点，实测离 joint 1 是 **101.5 px** 而不是 100。以前这里能过，是因为
+    旧实现夹的是弦长（等于偷偷拉长骨头），那是错的；这一条现在顺带钉住了 clamp。
     """
     sim = SimulationState((0.0, 0.0, 900.0, 600.0))
     for _ in range(200):
@@ -544,8 +550,8 @@ def test_cord_hooks_onto_joint_ones_elbow_not_joint_two():
     arm = sim.arm
     elbow = arm.elbow_pos(1)
     joint1, joint2 = arm.joints[1].pos, arm.joints[2].pos
-    assert abs(C.dist(elbow, joint1) - joint1_len(arm) * 2.0 / 3.0) < 0.5, "elbow not 100 px from joint 1"
-    assert abs(C.dist(elbow, joint2) - joint1_len(arm) / 3.0) < 0.5, "elbow not 50 px from joint 2"
+    assert abs(C.dist(elbow, joint2) - joint1_len(arm) / 3.0) < 0.5, "elbow not 50 px from joint 2 (start side)"
+    assert abs(C.dist(elbow, joint1) - joint1_len(arm) * 2.0 / 3.0) < 2.0, "elbow not ~100 px from joint 1"
     # the three stuck nodes sit at 0.40 / 0.47 / 0.54 of joint1 -> elbow
     hook = sim.cord.nodes[sim.cord.stuck_index]
     along = C.dist(hook, joint1)

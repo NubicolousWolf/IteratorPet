@@ -445,19 +445,51 @@ def inverse_kinematic(
     fore: float,
     flip: float = 1.0,
 ) -> tuple[float, float]:
-    """``Custom.InverseKinematic`` - the two-bone elbow solver."""
+    """``Custom.InverseKinematic``——按 IL 抄的两骨肘解算。
+
+    ``dotnet run -c Release --project tools/ildump -- "<Assembly-CSharp.dll>" "Custom::InverseKinematic"``
+    的实际指令序列：
+
+    ```csharp
+    d   = Vector2.Distance(va, vc);
+    c   = Clamp((d*d + A*A - B*B) / (2*d*A), 0.2f, 0.98f);
+    ang = Acos(c) * flip * 180f / PI;
+    return va + DegToVec(AimFromOneVectorToAnother(va, vc) + ang) * A;
+    ```
+
+    其中 ``DegToVec(t) = (sin t, cos t)``（游戏 +y 朝上，``BodyChunk.Update`` 的
+    ``vel.y -= gravity`` 可证），``Aim = VecToDeg(vc - va) = atan2(dx, dy)``。
+    把 y 镜像进本工程（+y 朝下）之后，上式等于
+    ``start + u*a + h*flip*(-u_y, u_x)``，``a = upper*c``、``h = upper*sin(acos c)``
+    ——正是下面这段代码，所以 **flip 在这里就是游戏的 flip，调用处不许再取负**
+    （``ArmChain.elbow_pos`` 和 ``renderer.drawn_elbow`` 取负是 2026-10-27 修掉的错，
+    方向验证见 ``_work/source_ik_probe.py``：4 个关节长度 × 各 500 组 × 两个 flip，
+    原样 1000/1000 命中、取负 0 命中）。
+
+    clamp 夹的是**余弦**，不是弦长：弦长超出两骨可行范围时，源码既不折叠也不拉伸，
+    而是把肘角钉在 ``acos(0.98)=11.5°`` / ``acos(0.2)=78.5°``。这里以前夹的是 reach，
+    退化区与源码差最多 154 px（同一支探针）。
+
+    两条腿的 ``bend``（``MenderSpiderLeg`` 那种）也走这条公式，``flip`` 在那里只是
+    选弯哪一侧，不是源码语义。
+    """
     sx, sy = start
     tx, ty = target
     dx, dy = tx - sx, ty - sy
     distance = hypot(dx, dy)
-    if distance < 1e-6:
+    if distance < 1e-6 or upper <= 0.0:
+        # 源码此处会除零。退化分支是设计增补，实际不会触发：相邻关节的弦长下限
+        # 是 0.2*L。取"沿 -y 伸直"只为不产生 NaN。
         return (sx, sy - min(upper, fore))
     ux, uy = dx / distance, dy / distance
-    reach = max(abs(upper - fore) + 1e-3, min(upper + fore - 1e-3, distance))
-    a = (upper * upper - fore * fore + reach * reach) / (2.0 * reach)
-    h = max(0.0, upper * upper - a * a) ** 0.5
-    bx, by = sx + ux * a, sy + uy * a
-    return (bx - uy * h * flip, by + ux * h * flip)
+    cos_angle = (distance * distance + upper * upper - fore * fore) / (2.0 * distance * upper)
+    if cos_angle < 0.2:
+        cos_angle = 0.2
+    elif cos_angle > 0.98:
+        cos_angle = 0.98
+    along = upper * cos_angle
+    bow = upper * (1.0 - cos_angle * cos_angle) ** 0.5
+    return (sx + ux * along - uy * bow * flip, sy + uy * along + ux * bow * flip)
 
 
 def bezier(

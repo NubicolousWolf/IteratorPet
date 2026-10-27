@@ -249,12 +249,6 @@ def _limb(painter: QPainter, a, elbow, b, width: float, alpha: int = 255, mesh_s
         painter.drawPath(path)
 
 
-def _inside(point, bounds, margin: float = 0.0) -> bool:
-    bx, by, bw, bh = bounds
-    return (bx + margin <= point[0] <= bx + bw - margin
-            and by + margin <= point[1] <= by + bh - margin)
-
-
 def _fit_inside(origin, direction, length: float, bounds) -> float:
     """把从 ``origin`` 沿 ``direction`` 伸 ``length`` 的杆件截到腔室里，返回可用长度。
 
@@ -282,10 +276,6 @@ def _fit_inside(origin, direction, length: float, bounds) -> float:
         if t >= 0.0:
             limit = min(limit, t)
     return max(0.0, limit)
-
-
-ARM_DRAW_MARGIN = 12.0  # 肘点判"在腔室里"留的余量：肢体网格半宽 7，源码的宽度调制
-                        # 最大 1.4 倍（0.6 + 0.5 + 0.3，og.cs:189-196）→ 9.8 px，再加圆盘半径 6
 
 
 def drawn_elbow(state: RenderState, index: int):
@@ -322,13 +312,11 @@ def drawn_elbow(state: RenderState, index: int):
     upper = length / 3.0
     fore = length / 3.0 if last else length * 2.0 / 3.0
     source_flip = 1.0 if index % 2 == 0 else -1.0
-    # flip 取负：本框架 y 轴朝下、游戏朝上，镜像会让翻转方向反过来
-    # （与 ArmChain.elbow_pos 用同一个换算）。
-    elbow = C.inverse_kinematic(tip, joint, upper, fore, -source_flip)
-    if state.bounds is not None and not _inside(elbow, state.bounds, ARM_DRAW_MARGIN):
-        mirrored = C.inverse_kinematic(tip, joint, upper, fore, source_flip)
-        if _inside(mirrored, state.bounds, ARM_DRAW_MARGIN):
-            elbow = mirrored
+    # flip 就是源码 `index % 2 == 0 ? 1 : -1` 那个符号，**不取负**：
+    # C.inverse_kinematic 已按 y 镜像帧实现，同一个 flip 给出同一侧
+    # （_work/source_ik_probe.py：4 个关节长度 × 500 组 × 两个 flip，原样 1000/1000
+    # 命中、取负 0 命中）。取负会把肘点画到弦的另一侧——2026-10-27 修掉。
+    elbow = C.inverse_kinematic(tip, joint, upper, fore, source_flip)
     return elbow, tip
 
 
@@ -389,7 +377,12 @@ def draw_arm(painter: QPainter, state: RenderState) -> None:
         piston_dir = C.dir_vec(near, elbow)
         piston_len = piston_h
         if state.bounds is not None:
-            piston_len = _fit_inside(elbow, piston_dir, piston_h, state.bounds)
+            # og.cs:97 `anchorY = 1` + og.cs:143 `rotation = Aim(Lerp(0.2), elbow)`：
+            # Futile 的 anchorY=1 让精灵从锚点朝 aim 的**反方向**长，所以这根活塞
+            # 实际是从肘点朝近点（弦）方向伸，而不是背离弦。截长度必须按画出来的
+            # 方向截——按 +piston_dir 截的是它根本不画的那一侧（600 s 里 24 个 tick
+            # 被无故截短，最多 32.9/50 px）。
+            piston_len = _fit_inside(elbow, (-piston_dir[0], -piston_dir[1]), piston_h, state.bounds)
         painter.save()
         painter.translate(QPointF(*elbow))
         painter.rotate(atan2(piston_dir[1], piston_dir[0]) * 180.0 / pi + 90.0)

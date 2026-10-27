@@ -53,8 +53,9 @@ class RenderState:
     behaviour: str
     time: float
     ticks: int
-    # 腔室矩形（仿真像素）。给渲染层做"屏幕边缘 = 房间墙"的收边：游戏里房间墙
-    # 离轨道很多格，肘点折出去也看不见；桌面这边墙就是屏幕边界（renderer.draw_arm）。
+    # 腔室矩形（仿真像素）。渲染层拿它把活塞截到腔室里（游戏里墙紧贴轨道，活塞压在
+    # 墙前看不出问题；桌面上屏幕外什么都没有，被窗口裁掉就是硬切口）。肘点**不**夹：
+    # 2026-10-27 的翻肘护栏会让肘点单 tick 跳 ~196 px，已整个拆掉。
     bounds: tuple[float, float, float, float] | None = None
 
     def lerp(self, other: "RenderState", alpha: float) -> "RenderState":
@@ -152,7 +153,12 @@ class SimulationState:
         self._prev: RenderState | None = None
         self._cur = self._compose()
 
-        for _ in range(120):
+        # 预跑 320 tick（8 s）而不是 120：机械臂刚建好时所有关节叠在基点，前 ~180 tick
+        # 要把链条拉开、把姿态摆稳，这段过渡里画出来的臂会擦出腔室（逐 tick 实测：
+        # seed 1234 的 62 个出界 tick 全在 tick 0–61，最大 6 px，tick>=200 一个都没有，
+        # 见 `_work/bleed_per_tick.py`）。构造期跑完，窗口第一帧就已经稳了。
+        # 代价：约 320 × 4 ms ≈ 1.3 s 启动时间。
+        for _ in range(320):
             self._advance()
 
     # -- geometry ----------------------------------------------------------

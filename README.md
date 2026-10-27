@@ -12,7 +12,7 @@ $env:PYTHONPATH = "src"
 python -m iterator\\\_pet.main
 ```
 
-托盘菜单可调速度、缩放、置顶、鼠标穿透；配置持久化在 `%LOCALAPPDATA%\\\\IteratorPet\\\\config.json`。
+托盘菜单可调置顶、鼠标穿透、显示滑轨、开发者面板（移速菜单因为从来没生效过，2026-10-27 已删，见 docs/ROADMAP.md §1.7）；配置持久化在 `%LOCALAPPDATA%\IteratorPet\config.json`。
 
 ## 功能
 
@@ -25,17 +25,17 @@ python -m iterator\\\_pet.main
 ### 美术资源
 
 精灵**不会**随仓库分发。启动时程序只读地从**你自己的** Rain World 安装里提取基础图元
-（`Circle20` / `CentipedeSegment` / `pixel` 等）到 `%LOCALAPPDATA%\\\\IteratorPet\\\\cache\\\\sprites\\\\`。
+（`Circle20` / `CentipedeSegment` / `pixel` 等）到 `%LOCALAPPDATA%\IteratorPet\cache\sprites\`。
 找不到游戏时会退化为等价像素图元，仍可运行。安装路径可用环境变量覆盖：
 
 ```powershell
-$env:RAINWORLD\\\_DIR = "D:\\\\SteamLibrary\\\\steamapps\\\\common\\\\Rain World"
+$env:RAINWORLD\\\_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
 ```
 
 ## 开发
 
 ```bash
-python -m pytest -q                      # 38 项测试
+python -m pytest -q                      # 73 项测试
 python tools/selftest.py                 # 无依赖烟雾测试
 python tools/puppet\\\_portrait.py          # 1:1 人偶特写
 python tools/roam\\\_report.py 10           # 10 分钟漫游统计（行为占比 / 覆盖）
