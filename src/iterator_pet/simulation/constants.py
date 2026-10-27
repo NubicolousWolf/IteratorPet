@@ -172,6 +172,44 @@ CORD_SWEEP_LINKS = 8         # links resolved per constraint pass (solver conver
 CORD_PLATE_SCALE = (0.5, 0.3)     # og.cs:947-948  (scaleX, scaleY)
 CORD_PLATE2_SCALE = (0.4, 0.15)   # og.cs:949-950  (scaleX, scaleY)
 
+# ------------------------------------------------------------ behaviour ----
+# DESIGN ADDITION -- the source has no behaviour chooser. ``SSOracleBehavior``
+# sets ``movementBehavior`` from story actions (SeePlayer -> KeepDistance,
+# conversation -> Talk, pearl -> ShowMedia) and, when nothing is happening,
+# ``Move()`` (ss.cs:4110) runs Idle, which ignores the player entirely. A desktop
+# pet has no story, so the three portable states are selected by a utility
+# score. Every number below is OURS, not the game's.
+BEHAVIOURS = ("roaming", "investigate", "talk")
+BEHAVIOUR_MIN_TICKS = 80        # 2 s: no flip-flopping between states
+BEHAVIOUR_SWITCH_MARGIN = 0.08  # a challenger must clearly beat the incumbent
+# Score inputs, in sim px and px/tick (40 TPS -> 25 px/tick = 1000 px/s).
+SCORE_NEAR_RANGE = 420.0        # within this the cursor "is nearby"
+SCORE_MOTION_SPEED = 8.0        # px/tick (320 px/s): 'actively moving'
+SCORE_STILL_TICKS = 80          # 2 s without cursor movement = "still"
+SCORE_TALK_RANGE = 520.0        # how near the cursor has to be to bother talking
+SCORE_SINCE_TICKS = 400         # 10 s: roaming gets restless
+# Weights.
+W_INVESTIGATE_NEAR = 0.60
+W_INVESTIGATE_MOTION = 0.50
+W_TALK_DISTANCE = 0.85
+W_ROAMING_BASE = 0.20
+W_ROAMING_SINCE = 0.20
+# Holding one pose forever is BORING: without this the pet locks into "talk"
+# next to a parked mouse (measured 2956/3000 ticks).
+W_ROAMING_BORED = 0.70
+SCORE_BORED_TICKS = 240         # 6 s in one state starts to get boring
+# ss.cs:4174-4204  Investigate: player.DangerPos + DegToVec(angle) * 150f, with
+# the angle kept inside (-70, 70) and swept at 0.4-0.8 deg/tick, random sign.
+INVESTIGATE_RADIUS = 150.0
+INVESTIGATE_ANGLE_LIMIT = 70.0
+INVESTIGATE_ANGLE_SPEED_MIN = 0.4
+INVESTIGATE_ANGLE_SPEED_MAX = 0.8
+# ss.cs:4167-4170  KeepDistance samples a room point and commits to it; the Talk
+# branch of CommunicatePosScore parks the iterator ~250 px from the player in a
+# 1400 px room. Scaled to the safe-rect width for a desktop chamber.
+TALK_DISTANCE_RATIO = 0.25
+TALK_REPICK = 60.0              # re-pick the talk spot if the cursor moved this far
+
 SMALL_CORDS = 14
 SMALL_CORD_NODES = 20
 # UbilicalCord: rnd<0.5 ? 50+rnd*15 : Lerp(50, 200, rnd^1.5)

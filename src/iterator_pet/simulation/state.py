@@ -15,11 +15,11 @@ exactly like the game's ``timeStacker``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import atan2, cos, degrees, hypot, sin
+from math import atan2, cos, degrees, hypot, radians, sin
 
 from . import constants as C
 from .arm import ArmChain
-from .behavior import Wander
+from .behavior import BehaviourSelector, Wander
 from .cord import Cord
 from .creature import Creature
 from .ornament import Gown, Halo, HaloBit
@@ -50,6 +50,7 @@ class RenderState:
     halo_bits: list[tuple[int, tuple[float, float], tuple[float, float], float]]
     halo_connections: list[tuple[tuple[float, float], tuple[float, float], tuple[float, float], float]]
     cursor: tuple[float, float] | None
+    behaviour: str
     time: float
     ticks: int
 
@@ -94,6 +95,7 @@ class RenderState:
             halo_bits=other.halo_bits,
             halo_connections=other.halo_connections,
             cursor=other.cursor,
+            behaviour=other.behaviour,
             time=other.time,
             ticks=other.ticks,
         )
@@ -132,6 +134,12 @@ class SimulationState:
         self.gown = Gown(self.creature.chunk0, self.creature.body_dir)
         self.halo = Halo(seed=seed)
 
+        self.selector = BehaviourSelector()
+        self.behaviour = "roaming"
+        self.investigate_angle = 0.0
+        self.investigate_speed = C.INVESTIGATE_ANGLE_SPEED_MIN
+        self._talk_point: tuple[float, float] | None = None
+        self._talk_anchor: tuple[float, float] | None = None
         self.cursor: tuple[float, float] | None = None
         self.time = 0.0
         self.ticks = 0
@@ -233,6 +241,47 @@ class SimulationState:
         get_to = self.wander.get_to()
         get_to_dir = self.wander.get_to_dir()
 
+        # ---- behaviour: roaming / investigate / talk ---------------------
+        # The selector is OUR addition (see constants.py); the three poses are
+        # the source's. ``get_to`` and the gaze are then re-derived per state.
+        cursor_speed = self.selector.observe_cursor(self.cursor)
+        talk_distance = self.wander._safe_rect()[2] * C.TALK_DISTANCE_RATIO
+        self.behaviour = self.selector.choose(
+            self.creature.chunk0, self.cursor, cursor_speed, talk_distance)
+        if self.behaviour == "investigate" and self.cursor is not None:
+            # ss.cs:4185-4188  angle inside +-70 deg, swept 0.4-0.8 deg/tick;
+            # nextPos = player + DegToVec(angle) * 150.
+            self.investigate_angle += self.investigate_speed
+            if abs(self.investigate_angle) > C.INVESTIGATE_ANGLE_LIMIT:
+                self.investigate_speed = -self.investigate_speed
+                self.investigate_angle = max(-C.INVESTIGATE_ANGLE_LIMIT,
+                                             min(C.INVESTIGATE_ANGLE_LIMIT,
+                                                 self.investigate_angle))
+            angle = radians(self.investigate_angle)
+            offset = (sin(angle) * C.INVESTIGATE_RADIUS,
+                      -cos(angle) * C.INVESTIGATE_RADIUS)
+            get_to = (self.cursor[0] + offset[0], self.cursor[1] + offset[1])
+        elif self.behaviour == "talk" and self.cursor is not None:
+            # ss.cs:4278-4285  CommunicatePosScore parks the iterator at a fixed
+            # distance from the player. Commit to a POINT (re-picked only if the
+            # cursor wanders off) so the body can arrive and rest instead of
+            # chasing a goal that slides every tick.
+            if (self._talk_point is None or self._talk_anchor is None
+                    or C.dist(self.cursor, self._talk_anchor) > C.TALK_REPICK):
+                direction = C.dir_vec(self.cursor, self.creature.chunk0)
+                if direction == (0.0, 0.0):
+                    direction = (0.0, 1.0)
+                self._talk_point = (self.cursor[0] + direction[0] * talk_distance,
+                                    self.cursor[1] + direction[1] * talk_distance)
+                self._talk_anchor = self.cursor
+            get_to = self._talk_point
+        else:
+            self._talk_point = None
+            self._talk_anchor = None
+
+        look_point = (self.cursor if self.behaviour != "roaming" and self.cursor is not None
+                      else self.wander.look_point)
+
         # ---- base: the puppet leads, the carriage follows (oracle.cs:327-331) --
         # baseMoving = Distance(BasePos, baseIdeal) > (baseMoving ? 50f : 350f)
         #              && consistentBasePosCounter > 30;
@@ -296,7 +345,7 @@ class SimulationState:
         # The destination was already clamped when it was picked, so ``get_to`` is
         # reachable; only the room has the last word (ClampVectorInRoom).
         get_to = self._clamp_to_room(get_to)
-        self.creature.step(get_to, get_to_dir, self.wander.look_point)
+        self.creature.step(get_to, get_to_dir, look_point)
         self.arm.update(
             pose.point, self.creature.chunk0, self.creature.chunk1,
             get_to_dir, self.base_moving, bounds=self._inset(),
@@ -414,6 +463,7 @@ class SimulationState:
             halo_bits=[(bit.ring, base, tip, bit.brightness) for bit, base, tip in bits],
             halo_connections=self.halo.connection_curves(center),
             cursor=self.cursor,
+            behaviour=self.behaviour,
             time=self.time,
             ticks=self.ticks,
         )
@@ -433,6 +483,7 @@ class SimulationState:
         return {
             "ticks": self.ticks,
             "frame_pos": round(self.frame_pos, 3),
+            "behaviour": self.behaviour,
             "base_moving": self.base_moving,
             "arm_stretch": round(arm_stretch, 2),
             "cord_stretch": round(self.cord.stretch()[0], 3),

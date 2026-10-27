@@ -1,17 +1,26 @@
-"""Where does the puppet actually spend its time? (the "stuck bottom-right" report)
+"""Where does the puppet actually spend its time, and in which behaviour?
 
-Run: PYTHONPATH=src python tools/roam_report.py [minutes]
+Run: PYTHONPATH=src python tools/roam_report.py [minutes] [cursor]
+
+``cursor`` is one of:
+  none     (default) no mouse at all -- the pet should roam
+  parked   a cursor frozen at the chamber centre -- should settle into talk
+  sweep    a smooth sweep around the chamber -- should settle into investigate
+
+Run it before and after changing the behaviour layer: the numbers here are the
+baseline the regression tests are calibrated against.
 """
 from __future__ import annotations
 
 import sys
 from collections import Counter
-from math import hypot
+from math import cos, hypot, sin
 
 from iterator_pet.simulation import constants as C
 from iterator_pet.simulation.state import SimulationState
 
 MINUTES = float(sys.argv[1]) if len(sys.argv) > 1 else 10.0
+CURSOR = sys.argv[2] if len(sys.argv) > 2 else "none"
 SW, SH, ZOOM = 1707.0, 912.0, 2.2
 bounds = (0.0, 0.0, SW / ZOOM, SH / ZOOM)
 x0, y0, w, h = bounds
@@ -21,10 +30,17 @@ ticks = int(MINUTES * 60 * C.GAME_HZ)
 
 xs, ys, stations = [], [], []
 dests = []
+behaviours = Counter()
 moving = 0
 for tick in range(ticks):
+    if CURSOR == "parked":
+        sim.cursor = (x0 + w * 0.5, y0 + h * 0.5)
+    elif CURSOR == "sweep":
+        sim.cursor = (x0 + w * 0.5 + w * 0.28 * cos(tick * 0.05),
+                      y0 + h * 0.5 + h * 0.22 * sin(tick * 0.05))
     before = sim.frame_pos
     sim._advance()
+    behaviours[sim.behaviour] += 1
     if abs(sim.frame_pos - before) > 1e-9:
         moving += 1
     if tick % 4 == 0:
@@ -57,6 +73,12 @@ for left in (True, False):
         key = (left, bottom)
         tag = ("right" if left else "left ") + "/" + ("bottom" if bottom else "top   ")
         print(f"  {tag}  {100*grid[key]/n:5.1f} %  {grid[key]:5d}")
+
+# behaviour mix -- the selector is ours, see constants.py
+print()
+print("behaviour             " + "  ".join(
+    f"{name} {100*behaviours.get(name, 0)/ticks:5.1f} %" for name in C.BEHAVIOURS))
+print(f"cursor mode           {CURSOR}")
 
 print(f"\nbase moved on          {100*moving/ticks:4.1f} % of ticks")
 print(f"base frame_pos         min {min(stations):.2f}  max {max(stations):.2f}  "

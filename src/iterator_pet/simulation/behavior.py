@@ -197,3 +197,91 @@ class Wander:
 
 def _lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
+
+
+class BehaviourSelector:
+    """``roaming`` / ``investigate`` / ``talk`` chosen by utility score.
+
+    DESIGN ADDITION. The source switches these states from story actions, never
+    from a score (see the block comment in ``constants.py``). What IS borrowed
+    from the source is the shape of each state: Investigate aims at
+    ``cursor + DegToVec(angle) * 150`` with the angle sweeping inside +-70 deg
+    (ss.cs:4174-4204), and Talk parks at a fixed distance from the player the way
+    ``CommunicatePosScore`` does (ss.cs:4278-4285). Only the selector is ours.
+    """
+
+    def __init__(self):
+        self.behaviour = "roaming"
+        self.ticks = 0
+        self.still_ticks = 0
+        self._last_cursor: tuple[float, float] | None = None
+
+    # -- inputs ------------------------------------------------------------
+    def observe_cursor(self, cursor: tuple[float, float] | None) -> float:
+        """Update the stillness counter; return the cursor's speed in px/tick."""
+        if cursor is None:
+            self.still_ticks = 0
+            self._last_cursor = None
+            return 0.0
+        if self._last_cursor is None:
+            speed = 0.0
+        else:
+            speed = C.dist(cursor, self._last_cursor)
+        self._last_cursor = cursor
+        if speed < 1.0:
+            self.still_ticks += 1
+        else:
+            self.still_ticks = 0
+        return speed
+
+    # -- scoring -----------------------------------------------------------
+    def scores(self, body, cursor, cursor_speed: float, talk_distance: float) -> dict[str, float]:
+        if cursor is None:
+            return {"roaming": 1.0, "investigate": 0.0, "talk": 0.0}
+        distance = C.dist(body, cursor)
+        near = max(0.0, 1.0 - distance / C.SCORE_NEAR_RANGE)
+        motion = min(1.0, cursor_speed / C.SCORE_MOTION_SPEED)
+        still = min(1.0, self.still_ticks / C.SCORE_STILL_TICKS)
+        # Restlessness: measured from how long the CURRENT state has been held,
+        # not from cursor stillness. Keyed on stillness it only opened a 4 s
+        # window after the mouse stopped (measured: talk 294/4000 ticks) because
+        # ``bored`` hit 1 while the cursor was still parked. "I have been doing
+        # this a while, let me go and wander" is the behaviour we actually want.
+        bored = min(1.0, max(0.0, (self.ticks - C.SCORE_BORED_TICKS)
+                             / float(C.SCORE_BORED_TICKS)))
+        # Talking is about the cursor being NEARBY -- the body then travels to the
+        # talk distance and holds there -- not about already being at it (that
+        # would never trigger: the pet would have to guess the right radius first).
+        talk_near = max(0.0, 1.0 - distance / C.SCORE_TALK_RANGE)
+        since = min(1.0, self.ticks / C.SCORE_SINCE_TICKS)
+        return {
+            # Investigate is about MOTION (the source triggers it when the player
+            # does something, ss.cs:4174): urgency is proximity + movement, never
+            # stillness -- a still cursor belongs to ``talk``, and sharing the
+            # stillness term made the two states fight to a near-tie.
+            "investigate": (C.W_INVESTIGATE_NEAR * near
+                            + C.W_INVESTIGATE_MOTION * motion),
+            # Talking needs the cursor to SETTLE; a cursor that is moving around
+            # is something to investigate, not to talk at. The stillness factor
+            # is multiplicative so a moving cursor kills the talk score outright.
+            "talk": (C.W_TALK_DISTANCE * (0.45 + 0.55 * talk_near)
+                     * (0.35 + 0.65 * still) * (1.0 - bored)),
+            # Roaming wins by default and keeps winning the longer it has been
+            # ignored, so the pet never parks on the cursor forever.
+            "roaming": (C.W_ROAMING_BASE + C.W_ROAMING_SINCE * since
+                        + C.W_ROAMING_BORED * bored),
+        }
+
+    def choose(self, body, cursor, cursor_speed: float, talk_distance: float) -> str:
+        scores = self.scores(body, cursor, cursor_speed, talk_distance)
+        if self.ticks < C.BEHAVIOUR_MIN_TICKS:
+            self.ticks += 1
+            return self.behaviour
+        best = max(scores, key=lambda name: scores[name])
+        if (best != self.behaviour
+                and scores[best] > scores[self.behaviour] + C.BEHAVIOUR_SWITCH_MARGIN):
+            self.behaviour = best
+            self.ticks = 0
+        else:
+            self.ticks += 1
+        return self.behaviour
