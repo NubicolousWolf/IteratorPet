@@ -42,12 +42,12 @@ def test_no_cursor_means_roaming():
 def _dominant(history: list[str]) -> str:
     """The state that holds the most ticks.
 
-    "Which state was active on tick 600" is a phase sample of a limit cycle, not
-    a verdict: with freshness in play the selector runs a cycle, and 600 ticks is
-    not a multiple of its period. Measured over 600 ticks: parked cursor ->
-    talk 439 / roam 161; sweeping cursor (amplitude 40) -> investigate 381 /
-    talk 139 / roam 80. The intent of these two tests is "this situation makes
-    that state WIN", which is a rate, so it is measured as one.
+    Used only where freshness turned state selection into a limit cycle: "which
+    state was active on tick 600" is then a phase sample, not a verdict (parked
+    cursor: period 481; sweeping cursor at amplitude 40: talk 139 / investigate
+    381 / roam 80 over 600). The intent -- "this situation makes that state WIN"
+    -- is a rate, so it is measured as one. The parked-cursor test does NOT need
+    this: its final tick is talk, and it keeps the strict ``final == "talk"``.
     """
     counts: dict[str, int] = {}
     for name in history:
@@ -59,7 +59,7 @@ def test_a_parked_cursor_earns_talk():
     """Nearby and motionless is the Talk pose: hold a distance and keep looking."""
     cursor = (BODY[0] + 150.0, BODY[1])
     final, history = _drive(lambda tick: cursor)
-    assert _dominant(history) == "talk", f"ended in {final}; mix={sorted(history)}"
+    assert final == "talk", f"ended in {final}"
     assert history.count("talk") > 0.5 * len(history)
 
 
@@ -96,13 +96,20 @@ def test_a_taskbar_trip_does_not_lock_the_pet():
     """Cursor to the taskbar and back: the pet has to look at it again.
 
     Reported symptom: "鼠标挪到任务栏一会后再挪回来，似乎无法再检测到鼠标，
-    一直触发roaming". The window is ``availableGeometry()``, so a pointer in the
-    taskbar strip does read as "no cursor" -- that part is intended. What was not
-    was the score ratchet: 12 s of continuous roaming saturated ``bored``, which
-    both maxed roaming's own score (0.20 + 0.20 + 0.70 = 1.10) and multiplied
-    talk's by ``(1 - bored)`` = 0, so talk was pinned at exactly 0.00 for the rest
-    of the session and nothing could exceed 1.10 + margin. Measured: roaming
-    60 s out of 60, talk 0.00 throughout.
+    一直触发roaming". Two separate things were wrong; this test pins the one that
+    made it permanent.
+
+    (a) The 48 px taskbar strip is outside the WINDOW but on the SCREEN. The port
+        now maps it into the chamber floor (``platform/pet_window.py``), so the
+        cursor does not vanish at all. This test still drives the selector with
+        ``cursor=None`` for 15 s because that is the harshest form of the same
+        situation -- and it is what a *different* monitor or a locked screen looks
+        like.
+    (b) The score ratchet: 12 s of continuous roaming saturated ``bored``, which
+        both maxed roaming's own score (0.20 + 0.20 + 0.70 = 1.10) and multiplied
+        talk's by ``(1 - bored)`` = 0, so talk was pinned at exactly 0.00 for the
+        rest of the session and nothing could exceed 1.10 + margin. Measured on the
+        old code, this test's phase B was 900/900 ticks of roaming with talk 0.000.
     """
     cursor = (BODY[0] + 150.0, BODY[1])
     selector = BehaviourSelector()
@@ -119,11 +126,13 @@ def test_a_taskbar_trip_does_not_lock_the_pet():
 
 
 def test_no_behaviour_locks_in_for_good():
-    """Guard: whatever the pet is doing, 60 s of a parked cursor changes its mind.
+    """Coarse guard: 60 s of a parked cursor never leaves the pet in one state.
 
-    This is the invariant the old ``bored`` ratchet broke for roaming. It is a
-    guard rather than the red-first reproduction (that is the taskbar test) --
-    investigate and talk were escapable by accident, through the opposite term.
+    NOT a regression test -- it also passes on the old code (seeded "roaming" with
+    ``ticks=0`` is dragged to talk at tick 80, long before ``bored`` saturates at
+    480). The red-first reproduction of the ratchet is the taskbar test above.
+    This one exists so that a future scoring change cannot make any single state
+    absorbing outright, which is a cheap invariant to keep.
     """
     cursor = (BODY[0] + 150.0, BODY[1])
     for seed in C.BEHAVIOURS:

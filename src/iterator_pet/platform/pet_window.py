@@ -99,7 +99,12 @@ class PetWindow(PetCanvas):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._timer.stop()
-        save(self.config)
+        # NO save() HERE. Every mutator (toggle_click_through / toggle_rail /
+        # set_speed) already persists, so closing wrote nothing new -- but a TOOL
+        # that builds a window from a default ``Config`` and then closes it
+        # overwrote the user's real config. That happened: ``tools/smoke_window.py``
+        # reset ``scale`` from the user's 1.5 to the 2.2 default, which silently
+        # changed the chamber size and made the pet 1.5x bigger on screen.
         self.closed.emit()
         super().closeEvent(event)
 

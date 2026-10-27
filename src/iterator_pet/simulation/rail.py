@@ -1,9 +1,18 @@
 """The chamber rail: ``framePos`` walks 0..4 around a rectangle.
 
 ``OracleArm.OnFramePos`` keeps one scalar ``framePos`` and derives both the base
-position and the inward normal from it. Straight stretches interpolate between
-consecutive corners; the last ``CORNER_BLEND`` (0.1) of every quadrant is a
-quarter arc of radius ``0.1 * edge_length``, so the base never jerks at a corner.
+position and the inward normal from it. ``oracle.cs:448-521``: the straight
+stretches are ``Vector2.Lerp`` between corners, and each corner is ONE quarter arc
+of radius ``0.1 * |corner0.x - corner1.x|`` (i.e. 0.1 x the TOP edge width, the
+source's ``num3``) spanning ``[k - 0.1, k + 0.1]`` -- a 0.2-wide window straddling
+the corner, with the wrap corner at k=0 split 45 + 45 degrees.
+
+THIS FILE IS NOT YET SOURCE-FAITHFUL: it draws the quarter arc twice, once in the
+tail ``[1 - CORNER_BLEND, 1]`` of quadrant q and again in the head
+``[0, CORNER_BLEND]`` of q+1, both starting at arc_t = 0. Crossing an integer
+therefore jumps the base from the arc's end back to its start (measured 139.6 px
+in one tick). See docs/ROADMAP.md 0.1 -- do not "fix" it by deleting the head
+branch, that would halve the arc.
 """
 
 from __future__ import annotations

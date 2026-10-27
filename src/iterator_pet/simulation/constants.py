@@ -110,16 +110,19 @@ ARM_MIN_LEN_STRAIGHT = 0.2  #                                    straight -> 0.2
 #                  && consistentBasePosCounter > 30;
 #     if (baseMoving) framePos = MoveTowardsAngle(framePos*90, num3*90, 1f)/90f;
 # 350 / 50 px are for a 1400 px wide room, so here they are ratios of the chamber
-# DIAGONAL: 0.30 / 0.036 -> ~264 / ~32 px on a 776x415 chamber. 0.30 rather than
-# 0.40 so the carriage starts moving WHILE the puppet is still inside the 353 px
-# arm's reach, instead of only after it has left it.
+# DIAGONAL: 0.30 / 0.036 -> 243 / 29 px on a 776x415 chamber (the INSET rect is
+# 724x363, diagonal 810; the outer diagonal 882 would give 264/32, which is what
+# an earlier version of this comment claimed while the code used the inset).
 BASE_MOVE_START_RATIO = 0.30   # puppet must stray this far before the base re-sites
 BASE_MOVE_STOP_RATIO = 0.036   # 50 / 1400
-# Hard ceiling on ``BASE_MOVE_START_RATIO * diagonal``, as a fraction of
-# ``DESTINATION_REACH_RATIO * ARM_LENGTHS_TOTAL`` (the destination clamp radius,
-# 353 px). A start threshold above that radius can NEVER be crossed -- every
-# destination is pulled inside it first -- so the carriage would never move. On
-# this machine's chamber the diagonal ratio is 366 px against a 353 px radius.
+# DESIGN ADDITION, not in the source. Hard ceiling on
+# ``BASE_MOVE_START_RATIO * diagonal``, as a fraction of ``DESTINATION_REACH_RATIO
+# * ARM_LENGTHS_TOTAL`` (the destination clamp radius, 353 px). A start threshold
+# well above that radius is crossed only by luck: every destination is pulled
+# inside it, so the carriage is asked to move on a few percent of ticks. Measured
+# before the cap on this machine's chamber: threshold 366 px vs clamp 353 px,
+# carriage moving on 2 % of ticks and driving 4 px/s. The 0.85 margin itself is
+# ours -- the cap is structural, 0.85 is a tune.
 BASE_MOVE_START_REACH_RATIO = 0.85
 BASE_MOVE_SPEED_DEG = 1.0      # Mathf.MoveTowardsAngle(..., 1f): 1 degree per tick
 BASE_STABLE_TICKS = 30         # consistentBasePosCounter > 30
@@ -191,10 +194,14 @@ BEHAVIOUR_SWITCH_MARGIN = 0.08  # a challenger must clearly beat the incumbent
 # Score inputs, in sim px and px/tick (40 TPS -> 25 px/tick = 1000 px/s).
 SCORE_NEAR_RANGE = 420.0        # within this the cursor "is nearby"
 SCORE_MOTION_SPEED = 8.0        # px/tick (320 px/s): 'actively moving'
-# Below this the cursor counts as STILL (same threshold in ``observe_cursor`` and
-# in the investigate gate, so "still" and "nothing to investigate" cannot drift
-# apart). 1 px/tick = 40 px/s.
-SCORE_MOTION_MIN = 1.0
+# Below this the cursor counts as STILL, which is what ``observe_cursor`` measures
+# (it drives talk's stillness PREFERENCE). The investigate gate is a different,
+# looser test -- "did the cursor move at all this tick" -- because the source's
+# investigate trigger is the player doing *something* (ss.cs:4174), not the player
+# being nearly motionless. They are deliberately different thresholds: a 0.5 px/tick
+# drift is still enough to talk *at* and still counts as motion to investigate, and
+# the two scores then decide. (docs/PROPOSAL-behaviour.md item 4 may unify them.)
+SCORE_MOTION_MIN = 1.0          # 1 px/tick = 40 px/s
 SCORE_STILL_TICKS = 80          # 2 s without cursor movement = "still"
 SCORE_TALK_RANGE = 520.0        # how near the cursor has to be to bother talking
 # Weights.

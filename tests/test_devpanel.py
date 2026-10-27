@@ -26,7 +26,7 @@ def test_status_reports_everything_the_panel_needs():
     sim = _sim()
     status = sim.status()
     for key in (
-        "ticks", "time", "behaviour", "scores", "cursor", "still_ticks",
+        "ticks", "time", "behaviour", "scores", "freshness", "cursor", "still_ticks",
         "frame_pos", "station_edge", "base_moving", "start_threshold",
         "stop_threshold", "base_body", "reach", "reach_ratio", "body_speed",
         "tilt_deg", "goal", "goal_distance", "dest", "progress",

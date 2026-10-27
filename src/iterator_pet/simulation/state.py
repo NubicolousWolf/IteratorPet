@@ -159,18 +159,19 @@ class SimulationState:
 
     def _refresh_thresholds(self) -> None:
         # oracle.cs:327 hard-codes 350 / 50 px for a 1400 px wide room; here they
-        # are ratios of the chamber diagonal (0.30 / 0.036 -> ~264 / ~32 px on a
-        # 776x415 chamber).
+        # are ratios of the INSET chamber diagonal (724x363 -> 810 on a 776x415
+        # chamber, i.e. 243 / 29 px; the outer diagonal 882 would give 264 / 32).
         #
-        # The start threshold is CAPPED by the destination clamp radius. This is
-        # structural, not taste: ``Wander.set_destination`` pulls every destination
-        # inside ``DESTINATION_REACH_RATIO * ARM_LENGTHS_TOTAL`` of the carriage
-        # (353 px), so a start threshold ABOVE that radius can never be crossed --
-        # the clamp always wins, the carriage never starts, and the puppet is
-        # pinned to a 353 px disc around a nail. That is exactly what happened at
-        # this machine's scale: 0.30 * 1220 = 366 px > 353 px, and the carriage
-        # measured 2 % moving ticks / 4 px/s against 31 % / 42 px/s in the
-        # documented 776x415 chamber.
+        # The start threshold is CAPPED by the destination clamp radius, and the
+        # reason is structural: ``Wander.set_destination`` pulls every destination
+        # inside ``DESTINATION_REACH_RATIO * ARM_LENGTHS_TOTAL`` (353 px), so a
+        # start threshold near or above that radius is crossed only by luck. At
+        # this machine's scale the uncapped value is 0.30 * 1220 = 366 px against
+        # that 353 px radius, and the carriage measured 2 % moving ticks / 4 px/s
+        # / 53 % x coverage, versus 31 % / 42 px/s / 73 % in the documented
+        # 776x415 chamber, where 243 px < 353 px does not conflict. (It is not
+        # literally zero: the body overshoots the destination clamp, so the old
+        # code moved on 2 % of ticks and reached 383 px from the carriage once.)
         _, _, w, h = self._inset()
         span = hypot(w, h)
         reach_radius = C.DESTINATION_REACH_RATIO * C.ARM_LENGTHS_TOTAL
@@ -191,10 +192,14 @@ class SimulationState:
 
     @property
     def bounds(self) -> tuple[float, float, float, float]:
-        """The chamber in SIMULATION pixels (``screen / config.scale``).
+        """The chamber in SIMULATION pixels.
 
-        Everything the simulation stores -- body positions, destinations, and
-        the cursor from ``platform/pet_window.py`` -- lives in this frame.
+        ``PetWindow`` builds it from ``QScreen.availableGeometry() / config.scale``
+        -- the WORKING AREA, not the whole screen (this machine: 1707x912 / 1.5 =
+        1138x608; the screen itself is 1707x960 and the 48 px taskbar strip is
+        excluded). Everything the simulation stores -- body positions,
+        destinations, and the cursor from ``platform/pet_window.py`` -- lives in
+        this frame.
         """
         return self._bounds
 

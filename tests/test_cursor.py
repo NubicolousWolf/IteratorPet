@@ -12,9 +12,13 @@ Regression: ``_track_cursor`` used to hand ``mapFromGlobal()`` straight to
 physically 1.5x closer than the constants intend.
 """
 
+from __future__ import annotations
+
+import inspect
+
 from PySide6.QtCore import QPoint, QRect
 
-from iterator_pet.platform.pet_window import cursor_sim_point
+from iterator_pet.platform.pet_window import PetWindow, cursor_sim_point
 
 SCREEN = QRect(0, 0, 1707, 960)      # this machine's logical screen
 ORIGIN = QPoint(0, 0)                # the pet window sits on availableGeometry
@@ -62,3 +66,22 @@ def test_every_accept_lands_inside_the_chamber():
             assert point is not None
             assert x <= point[0] <= x + w
             assert y <= point[1] <= y + h
+
+
+def test_the_window_feeds_the_simulation_through_this_function():
+    """The conversion must happen at the boundary, and only there.
+
+    Every test above calls the pure function, so all of them stay green if
+    ``_track_cursor`` goes back to handing ``mapFromGlobal()`` (screen pixels)
+    straight to ``set_cursor`` -- that is exactly the bug this file exists for.
+    There is no display in the test process, so this asserts on the source: the
+    window's cursor path must go through ``cursor_sim_point`` with the render
+    scale, and must not call ``mapFromGlobal`` at all.
+    """
+    source = inspect.getsource(PetWindow._track_cursor)
+    assert "cursor_sim_point(" in source, "_track_cursor bypasses the unit conversion"
+    assert "self.scale" in source, "_track_cursor no longer passes the render scale"
+    assert "mapFromGlobal" not in source, "screen pixels are leaking into the simulation"
+    assert "rect().contains" not in source, (
+        "the window rect is availableGeometry(), so the taskbar strip would read "
+        "as 'no cursor' again -- use the screen rect")
