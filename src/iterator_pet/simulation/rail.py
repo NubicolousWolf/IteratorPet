@@ -5,14 +5,18 @@ position and the inward normal from it. ``oracle.cs:448-521``: the straight
 stretches are ``Vector2.Lerp`` between corners, and each corner is ONE quarter arc
 of radius ``0.1 * |corner0.x - corner1.x|`` (i.e. 0.1 x the TOP edge width, the
 source's ``num3``) spanning ``[k - 0.1, k + 0.1]`` -- a 0.2-wide window straddling
-the corner, with the wrap corner at k=0 split 45 + 45 degrees.
+the corner, so the integer k is the arc's MIDPOINT (45 degrees).
 
-THIS FILE IS NOT YET SOURCE-FAITHFUL: it draws the quarter arc twice, once in the
-tail ``[1 - CORNER_BLEND, 1]`` of quadrant q and again in the head
-``[0, CORNER_BLEND]`` of q+1, both starting at arc_t = 0. Crossing an integer
-therefore jumps the base from the arc's end back to its start (measured 139.6 px
-in one tick). See docs/ROADMAP.md 0.1 -- do not "fix" it by deleting the head
-branch, that would halve the arc.
+``pose()`` mirrors that: the tail of quadrant q walks the arc at corner q+1 from
+0 to half way, and the head of quadrant q+1 continues the SAME arc from half way
+to the end. Crossing an integer is therefore continuous, and one tick of carriage
+travel (1 degree, ``BASE_MOVE_SPEED_DEG``) moves the base at most 12.1 px.
+
+A previous version restarted the arc at both ends of the integer (arc_t = 0 in
+both the tail and the head), drawing one quarter arc twice: the base jumped from
+the arc's end back to its start, 153.6 px (r*sqrt(2)) in a single tick. That was
+the visible "底座经常瞬移" -- 9 times per 5 minutes on this machine's chamber.
+``tests/test_simulation.py::test_the_rail_does_not_jump_at_a_corner`` pins it.
 """
 
 from __future__ import annotations
@@ -85,19 +89,33 @@ class RailPath:
             end = (b[0] - tangent[0] * r, b[1] - tangent[1] * r)
             return RailPose((_lerp(start[0], end[0], t), _lerp(start[1], end[1], t)), normal, tangent)
 
-        # Rounded corner: centre sits `r` inside the corner along both edges.
+        # Rounded corner. The arc belongs to ONE corner and spans the 0.2 of
+        # parameter centred on it -- [k - blend, k + blend] -- exactly like
+        # ``oracle.cs:448-521`` (``num2 = 0.1``, and ``num4`` is
+        # ``InverseLerp(k - 0.1, k + 0.1, num) * 90``), so the integer sits at the
+        # arc's MIDPOINT (45 deg) and crossing it is continuous.
+        #
+        # This used to restart the arc at both ends of the integer (arc_t = 0 in
+        # the tail of quadrant q and again in the head of q+1), so one quarter arc
+        # was drawn twice and the base jumped from the arc's END back to its START
+        # -- 139.6 px in a single 1-degree tick on this chamber, i.e. the visible
+        # "teleport" (docs/ROADMAP.md 0.1).
         if local < blend:
-            arc_t = local / blend
+            # Second half of the arc at the corner we just rounded.
+            arc_t = 0.5 + 0.5 * (local / blend)
             corner = a
             in_t = self.tangents[(quadrant - 1) % 4]
             out_t = self.tangents[quadrant]
             prev_normal = self.normals[(quadrant - 1) % 4]
+            next_normal = normal
         else:
-            arc_t = (local - (1.0 - blend)) / blend
+            # First half of the arc at the corner we are about to round.
+            arc_t = 0.5 * ((local - (1.0 - blend)) / blend)
             corner = b
             in_t = self.tangents[quadrant]
             out_t = self.tangents[(quadrant + 1) % 4]
             prev_normal = normal
+            next_normal = self.normals[(quadrant + 1) % 4]
         centre = (
             corner[0] - in_t[0] * self.radius + out_t[0] * self.radius,
             corner[1] - in_t[1] * self.radius + out_t[1] * self.radius,
@@ -106,7 +124,6 @@ class RailPath:
         end_angle = atan2(in_t[1], in_t[0])
         angle = _short_arc(start_angle, end_angle, arc_t)
         point = (centre[0] + cos(angle) * self.radius, centre[1] + sin(angle) * self.radius)
-        next_normal = self.normals[(quadrant + 1) % 4] if local >= 1.0 - blend else normal
         return RailPose(
             point,
             _slerp_vec(prev_normal, next_normal, arc_t),

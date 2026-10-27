@@ -32,6 +32,22 @@ DEFAULT_SIZE = (1707, 912)
 DEFAULT_ZOOM = 2.2
 
 
+def live_zoom() -> float:
+    """The scale this desktop actually runs with (see ``config``).
+
+    Hard-coding 2.2 described a 776x415 chamber; this machine runs 1.5, i.e.
+    1138x608, and a panel that reports thresholds from a chamber that does not
+    exist on the machine is worse than no panel. ``roam_report.py`` reads the
+    same value.
+    """
+    try:
+        from iterator_pet.config import load
+
+        return max(0.3, min(4.0, float(load().scale)))
+    except Exception:
+        return DEFAULT_ZOOM
+
+
 def build_sim(size: tuple[int, int], zoom: float) -> SimulationState:
     width, height = size
     return SimulationState((0.0, 0.0, width / zoom, height / zoom))
@@ -57,7 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cursor", default="none", choices=("none", "parked", "sweep"))
     parser.add_argument("--size", type=int, nargs=2, default=list(DEFAULT_SIZE),
                         metavar=("W", "H"), help="logical screen size")
-    parser.add_argument("--zoom", type=float, default=DEFAULT_ZOOM)
+    parser.add_argument("--zoom", type=float, default=None,
+                        help="render scale; default reads config.json (this desktop)")
     parser.add_argument("--grab", metavar="PNG", help="render the panel to a PNG and exit")
     parser.add_argument("--seconds", type=float, default=20.0,
                         help="simulated seconds before grabbing (or before printing)")
@@ -65,7 +82,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="print the panel text to stdout and exit (no Qt window)")
     args = parser.parse_args(argv)
 
-    sim = build_sim(tuple(args.size), args.zoom)
+    zoom = args.zoom if args.zoom is not None else live_zoom()
+    sim = build_sim(tuple(args.size), zoom)
+    print(f"# chamber {args.size[0] / zoom:.0f}x{args.size[1] / zoom:.0f} sim px "
+          f"(scale {zoom})")
     ticks = max(1, int(args.seconds / GAME_DT))
     if args.print:
         # Qt is still needed for font metrics; the text itself does not need a window.

@@ -30,6 +30,43 @@ def test_rail_projection_round_trips():
         assert abs(rail.project(point) - f) < 0.05
 
 
+def test_the_rail_does_not_jump_at_a_corner():
+    """One tick of carriage travel must never teleport the base.
+
+    ``OracleArm.OnFramePos`` (``oracle.cs:448-521``) draws ONE quarter arc per
+    corner over the 0.2-wide parameter window centred on the integer
+    (``num2 = 0.1``; ``num4 = InverseLerp(k-0.1, k+0.1, num) * 90``), so the
+    integer is the arc's MIDPOINT, 45 degrees, and crossing it is continuous.
+
+    This port used to restart that arc at both ends of the integer, drawing the
+    same quarter arc twice: crossing it jumped the base from the arc's end back to
+    its start. With this chamber's rail the jump is r*sqrt(2) = 153.6 px in a
+    single tick, and the carriage travels exactly 1 degree per tick
+    (``BASE_MOVE_SPEED_DEG``), which is what the user sees as "底座经常瞬移".
+    Measured before the fix: 9 jumps per 5 minutes on this machine's chamber.
+    """
+    rail = RailPath((0.0, 0.0, 1086.0, 556.0))
+
+    for corner in (0.0, 1.0, 2.0, 3.0, 4.0):
+        before = rail.pose(corner - 1e-6).point
+        after = rail.pose(corner + 1e-6).point
+        gap = hypot(before[0] - after[0], before[1] - after[1])
+        assert gap < 0.5, f"discontinuity of {gap:.1f} px at framePos {corner}"
+
+    step = 1.0 / 90.0                     # 1 degree = one tick of carriage travel
+    worst = 0.0
+    for index in range(int(4.0 / step)):
+        here = rail.pose(index * step).point
+        nxt = rail.pose((index + 1) * step).point
+        worst = max(worst, hypot(nxt[0] - here[0], nxt[1] - here[1]))
+    # Legitimate max is the long straight edge: (1086 - 2*108.6) / 0.8 / 90 =
+    # 12.07 px per degree, and 4.7 px on the short edge -- the source's fixed arc
+    # radius makes the speed differ per edge, which is its behaviour, not a jump.
+    # The defect this catches was 139.6 px, so 20 leaves 1.6x headroom and still
+    # fails the bug by 7x.
+    assert worst < 20.0, f"one tick moves the base {worst:.1f} px"
+
+
 def test_arm_keeps_link_lengths_under_load():
     arm = ArmChain((100.0, 100.0))
     body0 = (600.0, 200.0)
