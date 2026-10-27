@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Local render/QA artefacts (never publish)
+preview*.png
+!docs/preview.png
+crop*.png
+window-grab*.png
+replay*.json
+puppet-portrait*.png
+
+# Editors / OS
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
+
+# .NET tool build output (tools/ildump)
+bin/
+obj/
