@@ -5,7 +5,7 @@ Tick order mirrors ``Oracle.Update``:
 1. behaviour picks a Bezier goal and a gaze point,
 2. the arm drives the two body chunks (clamped impulses, no gravity),
 3. the creature integrates its head/hands/feet,
-4. the base decides whether to slide along the rail (hysteresis + 1°/tick),
+4. the base decides whether to slide along the rail (hysteresis + 0.12/0.45°/tick),
 5. ornaments (cord, gown, halo) follow.
 
 The renderer interpolates between the previous and current tick with ``alpha``,
@@ -355,8 +355,18 @@ class SimulationState:
             must_follow or self.consistent_base_pos > C.BASE_STABLE_TICKS
         )
         if self.base_moving:
+            # Two-tier speed (see constants.BASE_SPEED_*): slow while the body is
+            # close, fast only when the carriage has most of a quadrant left to
+            # drive. The source's literal 1 degree/tick is 249 px/s on its 560 px
+            # rail and measured 135 px/s here, which is what the user saw as the
+            # carriage racing the puppet.
+            _, _, cw, ch = self._inset()
+            remaining = abs((ideal_f - self.frame_pos + 2.0) % 4.0 - 2.0)
+            ahead = remaining * 0.5 * (cw + ch)        # px of rail left to drive
+            speed = (C.BASE_SPEED_FAST
+                     if ahead > 0.5 * hypot(cw, ch) else C.BASE_SPEED_SLOW)
             self.frame_pos = move_towards_angle(
-                self.frame_pos * 90.0, ideal_f * 90.0, C.BASE_MOVE_SPEED_DEG
+                self.frame_pos * 90.0, ideal_f * 90.0, speed
             ) / 90.0
             self.frame_pos %= 4.0
 

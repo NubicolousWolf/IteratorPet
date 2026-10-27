@@ -114,7 +114,7 @@ for q in range(4):
 print()
 print(f"carriage start / stop  {sim.start_threshold:.0f} / {sim.stop_threshold:.0f} px"
       f"   (ratios {C.BASE_MOVE_START_RATIO} / {C.BASE_MOVE_STOP_RATIO})")
-print(f"carriage speed         {C.BASE_MOVE_SPEED_DEG} deg/tick   stable gate {C.BASE_STABLE_TICKS} ticks")
+print(f"carriage speed         {C.BASE_SPEED_SLOW}/{C.BASE_SPEED_FAST} deg/tick (slow/fast)   stable gate {C.BASE_STABLE_TICKS} ticks")
 print(f"must-follow override   {sum(C.ARM_LENGTHS)*C.BASE_FOLLOW_ARM_RATIO:.0f} px from the carriage")
 print(f"destination clamp      {C.ARM_LENGTHS_TOTAL*C.DESTINATION_REACH_RATIO:.0f} px from the carriage"
       f"   (arm {C.ARM_LENGTHS_TOTAL:.0f})")

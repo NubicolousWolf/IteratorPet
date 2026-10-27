@@ -124,7 +124,23 @@ BASE_MOVE_STOP_RATIO = 0.036   # 50 / 1400
 # carriage moving on 2 % of ticks and driving 4 px/s. The 0.85 margin itself is
 # ours -- the cap is structural, 0.85 is a tune.
 BASE_MOVE_START_REACH_RATIO = 0.85
-BASE_MOVE_SPEED_DEG = 1.0      # Mathf.MoveTowardsAngle(..., 1f): 1 degree per tick
+# CARRIAGE SPEED -- mechanism is the source's, magnitude is ours.
+# oracle.cs:327-331 moves the SCALED angle by one degree per tick
+#     framePos = Mathf.MoveTowardsAngle(framePos * 90f, num3 * 90f, 1f) / 90f
+# i.e. 1/90 of a rail quadrant: 6.2 px/tick = 249 px/s on the game's 560 px rail,
+# which reads as a ~2 s slide across one chamber edge. Copied literally onto this
+# port's 1138 px rail it measured 135 px/s while moving and crossed one edge in
+# 8.4 s -- the carriage visibly flies along the rail while the puppet ambles.
+# Before the roaming rewrite (6d97b57) this port ran the same two numbers --
+# 0.12 / 0.45, plus a third "still" tier (灵枢 mem_1792983112584_f6afa0 records the
+# old design as fast when the puppet was beyond 0.34 x the chamber diagonal, slow
+# from 0.26 x, still below). Here the "still" tier is the hysteresis above
+# (start_threshold), so only the two speeds come back: fast when the carriage
+# still has most of a quadrant to drive, slow otherwise. Same MoveTowardsAngle,
+# same per-tick call, slower magnitude -- 135 px/s measured before, 51 px/s now,
+# one edge in 22 s instead of 8.4 s.
+BASE_SPEED_SLOW = 0.12         # degrees of the scaled angle per tick
+BASE_SPEED_FAST = 0.45
 BASE_STABLE_TICKS = 30         # consistentBasePosCounter > 30
 # Design addition (not in the source): the arm is 570 px, so the carriage must
 # follow once the puppet is further than this fraction of it, ignoring the

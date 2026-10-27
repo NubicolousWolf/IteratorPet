@@ -10,7 +10,8 @@ the corner, so the integer k is the arc's MIDPOINT (45 degrees).
 ``pose()`` mirrors that: the tail of quadrant q walks the arc at corner q+1 from
 0 to half way, and the head of quadrant q+1 continues the SAME arc from half way
 to the end. Crossing an integer is therefore continuous, and one tick of carriage
-travel (1 degree, ``BASE_MOVE_SPEED_DEG``) moves the base at most 12.1 px.
+travel (one degree, ``BASE_MOVE_SPEED_DEG`` = now 0.12/0.45 deg) moves the
+base at most 12.1 px.
 
 A previous version restarted the arc at both ends of the integer (arc_t = 0 in
 both the tail and the head), drawing one quarter arc twice: the base jumped from
