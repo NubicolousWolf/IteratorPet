@@ -284,7 +284,8 @@ def _fit_inside(origin, direction, length: float, bounds) -> float:
     return max(0.0, limit)
 
 
-ARM_DRAW_MARGIN = 8.0   # 肘点判"在腔室里"时给轮廓留的余量（肢体半宽 7 / 圆盘半径 6）
+ARM_DRAW_MARGIN = 12.0  # 肘点判"在腔室里"留的余量：肢体网格半宽 7，源码的宽度调制
+                        # 最大 1.4 倍（0.6 + 0.5 + 0.3，og.cs:189-196）→ 9.8 px，再加圆盘半径 6
 
 
 def drawn_elbow(state: RenderState, index: int):
