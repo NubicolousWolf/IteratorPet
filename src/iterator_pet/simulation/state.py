@@ -540,6 +540,9 @@ class SimulationState:
             # thing, which is why the panel used to show a "best" that lost.
             "weights": {k: round(v, 3) for k, v in self.selector.weights.items()},
             "eligible": list(self.selector.eligible),
+            # The mood the last draw was forbidden to pick (the hand-over rule).
+            # Without it, "weight 0.00" means two different things.
+            "excluded": self.selector.excluded,
             "draws": self.selector.draws,
             "talk_cooldown": self.selector.talk_cooldown,
             # How long the current state has been held, against the segment length

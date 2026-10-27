@@ -197,7 +197,12 @@ BEHAVIOUR_MIN_TICKS = 80        # 2 s: a boundary may not flip the pose sooner
 # whenever the cursor shows up. That is why the old scorer sat at 68 % talk with
 # the cursor parked even though roaming had the highest base score.
 BEHAVIOUR_BASE = {"roaming": 1.00, "investigate": 0.55, "talk": 0.45}
-# How long one segment of each mood runs before the next draw, in ticks.
+# The MAXIMUM length of one segment, in ticks. A segment also ends the moment its
+# mood's gate shuts -- and in practice that is what ends investigate and talk:
+# measured with "mouse moves 5 s, rests 5 s" (10 min), all 16 investigate/talk
+# segments ended on the gate (lengths 80-200 and 80-99) and only roaming ever
+# served its nominal 450. The number below is therefore a ceiling; the panel
+# prints it as ``held X/max Yt``.
 #   roaming     450 = 11.25 s
 #   investigate 240 =   6 s
 #   talk        900 =  22.5 s
@@ -216,10 +221,20 @@ TALK_COOLDOWN_TICKS = 2400
 # that starts at TALK_GAIN_MIN when the cursor has just stopped and reaches
 # TALK_GAIN_MAX after TALK_HOVER_FULL_TICKS of hovering. Measured P(talk wins the
 # draw | talk was eligible), 15 min, 8 seeds:
-#   hover 10-30 s   P = 0.43
-#   hover >= 90 s   P = 0.77
-# and the time from "the cursor stops" to the first conversation is median 17.5 s
+#   hover 10-30 s   P = 0.43  (n=14 draw where talk was eligible)
+#   hover >= 90 s   P = 0.77  (n=94)
+# "| eligible" matters: the UNCONDITIONAL chance that a draw picks talk falls
+# from 0.43 to 0.14 as the hover grows, because deep into a hover most draws are
+# inside the cooldown. And there is no draw at all before hover = 450 ticks (the
+# roaming segment), so nothing above describes the first 11 s. The two middle
+# buckets have n=2 and n=0, so this is two measured points, not a measured curve.
+# The time from "the cursor stops" to the first conversation is median 17.5 s
 # (min 6.2, max 62.5, n=8) -- the pet is shy, not instant.
+#
+# How much hover the pet loses per tick in which the cursor moved at all. The
+# GATE is still the single 0 px/tick line (below); this only damps the ramp, so a
+# resting hand that twitches one mouse count loses a second of warm-up, not 90.
+STILL_DECAY_TICKS = 40          # 1 s
 TALK_GAIN_MIN = 0.10
 TALK_GAIN_MAX = 3.0
 TALK_HOVER_FULL_TICKS = 3600    # 90 s: the ramp is deliberately slow, so a mouse
@@ -256,11 +271,11 @@ SCORE_FRESHNESS_RECOVER = 1.0 / 240.0  # 6 s of not doing it refills it
 # Freshness damps a mood's draw weight but never zeroes it, so the ONLY thing
 # that can forbid a mood is its gate. Without this floor the mood that has just
 # finished a segment is always at 0.06 weight while its rival is at 1.0, so every
-# boundary is decided in advance by the durations. Measured before the floor: the
-# parked split was 76.2 / 23.8 on ALL EIGHT seeds (identical to a tenth of a
-# percent) and talk fired 6.2 s after the cursor stopped on 7 of 8 -- a draw that
-# cannot change the outcome is not a draw. With the floor the hover ramp is what
-# decides a boundary, and the split varies with the seed.
+# boundary is decided in advance by the durations. Measured with the floor set to
+# 0.0: the parked split is 75.0 / 25.0 on ALL EIGHT seeds -- one distinct value,
+# i.e. a draw that cannot change the outcome is not a draw. With 0.35 the seeds
+# spread over parking 75.0-76.2 % and the hover ramp is what decides a boundary.
+# Reproduce: _work/behaviour_ablation.py (group A).
 FRESHNESS_FLOOR = 0.35
 # ss.cs:4174-4204  Investigate: player.DangerPos + DegToVec(angle) * 150f, with
 # the angle kept inside (-70, 70) and swept at 0.4-0.8 deg/tick, random sign.
@@ -278,7 +293,12 @@ INVESTIGATE_ANGLE_SPEED_MAX = 0.8
 # It is a CONSTANT in sim px, not a ratio of the chamber: a standoff that scales
 # with the room is 236 px on a 1138 px chamber and 194 px on a 776 px one, i.e.
 # "how far away it stands" would depend on the monitor, which is not a thing the
-# user asked for. Measure: `_work/talk_standoff.py`, docs/PROPOSAL-behaviour.md S1.1.
+# user asked for. Measure: `_work/talk_standoff.py` -- it prints
+#   gown x-span over 1200 ticks: median 25.2  max 38.9  min 17.7 sim px
+#   3 x median = 75.5 -> TALK_DISTANCE = 76.0 (3.02 gown widths)
+# so the number is reproducible rather than remembered. (The median, not the max:
+# the gown is a swinging cloth grid, and 3 x 38.9 = 117 would be "three widths"
+# only at the widest instant of the wobble.)
 TALK_DISTANCE = 76.0
 TALK_REPICK = 60.0              # re-pick the talk spot if the cursor moved this far
 

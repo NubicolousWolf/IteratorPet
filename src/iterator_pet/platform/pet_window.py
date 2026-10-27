@@ -114,9 +114,24 @@ class PetWindow(PetCanvas):
         elapsed = now - self._last
         self._last = now
         if not self._paused and elapsed > 0.0:
-            self._loop.advance(elapsed, self.simulation.step)
+            # The cursor must be sampled once per SIMULATION TICK, not once per
+            # frame. ``advance`` can run up to 8 sub-steps for one frame, and the
+            # behaviour gates are per tick: sampling per frame made every repeat
+            # tick read a speed of exactly 0, which shuts ``investigate`` and
+            # opens ``talk`` -- measured through the real simulation with a cursor
+            # moving 3 px/frame: 1 tick/frame -> investigate 24 %, 2+ ticks/frame
+            # -> investigate 2 % and talk starts while the mouse is MOVING. Worse,
+            # every segment length is even, so the parity of boundary ticks is
+            # conserved and a boundary that lands on a duplicate sample stays
+            # duplicate forever.
+            self._loop.advance(elapsed, self._step_once)
         self._track_cursor()
         self.update()
+
+    def _step_once(self, dt: float) -> None:
+        """One 40 TPS tick: look at the pointer, then step the physics."""
+        self._track_cursor()
+        self.simulation.step(dt)
 
     def _track_cursor(self) -> None:
         """Feed the global cursor position to the puppet so it can look at it."""

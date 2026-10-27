@@ -14,6 +14,7 @@ in. The numbers asserted here are the user's targets, measured in
 ``_work/behaviour_probe.py`` (15 min x 8 seeds) -- see AGENTS 6.2.
 """
 
+import inspect
 from math import sin
 
 from iterator_pet.simulation import constants as C
@@ -56,9 +57,15 @@ def test_no_cursor_means_roaming():
 def test_a_parked_cursor_still_roams_three_quarters_of_the_time():
     """The user's target: "roaming 75 %" while the cursor sits still.
 
-    15 min of a parked cursor. Measured 75.0-76.2 % across 8 seeds, so the band
-    is the target itself and not a rubber stamp: the old argmax code sat at
-    roaming 31.8 % / talk 68.2 % on this exact scenario.
+    15 min of a parked cursor. Measured 75.0-76.2 % across 8 seeds; old argmax
+    code sat at roaming 31.8 % / talk 68.2 % on this exact scenario.
+
+    WHAT THIS TEST DOES NOT PIN: the 75 % is the cooldown arithmetic
+    900/(900+2700), not the roulette -- a deterministic argmax at the boundaries
+    also lands on 75.00, and 7 of 8 seeds give exactly 75.00 %. The band is a
+    coarse net (20x the seed spread). The draw itself is pinned by
+    ``test_the_draw_follows_its_weights`` and the hand-over rule by
+    ``test_a_finished_conversation_must_hand_over``.
     """
     _, history = _drive(_parked, ticks=40 * 900)
     roaming, talk = _share(history, "roaming"), _share(history, "talk")
@@ -72,7 +79,8 @@ def test_a_moving_cursor_earns_investigate_without_crowding_out_roaming():
 
     The user's complaint was "it runs after the mouse forever" (roaming 9.1 %,
     investigate 68.4 % measured on the old selector). Investigating is now a
-    ~one-in-five detour.
+    ~one-in-four detour. Like the parked test, the band is a coarse net; the
+    mechanism is pinned by the three tests below.
     """
     _, history = _drive(_sweep, ticks=40 * 600)
     investigate = _share(history, "investigate")
@@ -102,7 +110,21 @@ def test_the_conversation_standoff_is_three_gown_widths():
     assert sim.behaviour == "talk", "the pet never entered talk with a parked cursor"
     assert sim._talk_point is not None
     measured = C.dist(sim._talk_point, cursor)
-    assert abs(measured - C.TALK_DISTANCE) < 1.0, f"standoff {measured:.1f} px"
+    assert abs(measured - C.TALK_DISTANCE) < 1.0, f"standoff point {measured:.1f} px"
+
+    # ... and the BODY has to actually walk there. Asserting only the point is
+    # asserting the line above that built it (state.py:306) -- the test would
+    # pass if the puppet never moved a pixel toward the cursor.
+    entry = C.dist(sim.creature.chunk0, cursor)
+    for _ in range(40 * 20):
+        if sim.behaviour != "talk":
+            break
+        sim.step(0.025)
+    settled = C.dist(sim.creature.chunk0, cursor)
+    assert settled < entry - 10.0, (
+        f"the body did not approach: {entry:.0f} -> {settled:.0f} px")
+    assert abs(settled - C.TALK_DISTANCE) < 40.0, (
+        f"the body stands {settled:.0f} px from the cursor, not {C.TALK_DISTANCE:.0f}")
 
 
 def test_the_selector_does_not_flip_flop():
@@ -173,7 +195,14 @@ def test_no_behaviour_locks_in_for_good():
 
 
 def test_a_conversation_starts_a_one_minute_cooldown():
-    """No second conversation within TALK_COOLDOWN_TICKS of the previous one."""
+    """No second conversation within TALK_COOLDOWN_TICKS of the previous one.
+
+    Also asserts the COUNTER, not just the gap: with 450-tick boundaries the
+    first eligible draw after a 2400-tick cooldown is at 2700, so a gap-only
+    assertion would still pass for a cooldown as short as ~1950 ticks. And a
+    self-renewing talk segment never *ends*, so the old gap assertion could not
+    fail at all in that mode (it never reached the ``talk_ended`` branch).
+    """
     selector = BehaviourSelector()
     previous = None
     talk_started = None
@@ -191,6 +220,10 @@ def test_a_conversation_starts_a_one_minute_cooldown():
                 )
         if previous == "talk" and name != "talk":
             talk_ended = tick
+            assert selector.talk_cooldown == C.TALK_COOLDOWN_TICKS, (
+                f"leaving talk must arm the full cooldown, got {selector.talk_cooldown}")
+            assert selector.weights_for(BODY, _parked(tick), 0.0)["talk"] == 0.0, (
+                "talk still has a draw weight on the tick it ended")
         previous = name
     assert talk_started is not None, "no conversation in 15 min of hovering"
 
@@ -262,3 +295,79 @@ def test_the_state_and_the_gaze_reach_the_render_state():
     want = C.dir_vec(body, cursor)
     got = C.dir_vec((0.0, 0.0), state.look_dir)
     assert got[0] * want[0] + got[1] * want[1] > 0.9, "the gaze left the cursor"
+
+
+def test_a_finished_conversation_must_hand_over():
+    """A segment that runs out takes its own mood out of the next draw.
+
+    This is the rule that makes the 60 s cooldown real: if the mood may re-draw
+    itself, talk renews past its segment, never "ends", and its cooldown never
+    starts (measured on the build without this rule: parked roaming 61.3-72.5 %
+    instead of 75.0-76.2 %). Removing the rule makes this test fail on every
+    seed, which the rate tests above do not.
+    """
+    boundary = C.BEHAVIOUR_SEGMENT_TICKS["talk"]
+    # EIGHT seeds, not one: without the hand-over rule talk renews itself on
+    # roughly a third of its own boundaries (its drained weight is ~0.47 vs
+    # roaming's ~1.0), so a single seed passes by luck 68 % of the time -- which
+    # is exactly how the audit's substituted bug slipped past a one-seed version.
+    for seed in range(1, 9):
+        selector = BehaviourSelector(seed=seed)
+        for tick in range(40 * 200):
+            speed = selector.observe_cursor(_parked(tick))
+            if selector.choose(BODY, _parked(tick), speed) == "talk":
+                break
+        assert selector.behaviour == "talk", f"seed {seed} never entered talk"
+
+        for _ in range(boundary + 5):
+            speed = selector.observe_cursor(_parked(0))
+            selector.choose(BODY, _parked(0), speed)
+            if selector.behaviour != "talk":
+                break
+        assert selector.behaviour != "talk", (
+            f"seed {seed}: talk re-drew itself at its own boundary;"
+            " the cooldown never starts")
+        assert selector.talk_cooldown > 0
+
+
+def test_the_draw_cannot_pick_an_excluded_mood():
+    """``_draw(exclude=...)`` must never return that mood, gate or not."""
+    selector = BehaviourSelector(seed=11)
+    fixed = {"roaming": 0.01, "investigate": 0.0, "talk": 10.0}
+    selector.weights_for = lambda *a, **k: dict(fixed)     # type: ignore[method-assign]
+    counts = {name: 0 for name in C.BEHAVIOURS}
+    for _ in range(2000):
+        selector._draw(BODY, (BODY[0] + 150.0, BODY[1]), 0.0, exclude="talk")
+        counts[selector.behaviour] += 1
+    assert counts["talk"] == 0, f"talk was drawn {counts['talk']} times while excluded"
+    assert counts["roaming"] == 2000
+
+
+def test_every_tick_of_a_frame_sees_a_fresh_cursor_sample():
+    """The window must sample the cursor per SIM TICK, not once per frame.
+
+    ``FixedStepLoop.advance`` runs up to 8 sub-steps for one frame; the behaviour
+    gates are per tick. Sampling per frame made every repeat tick read a speed of
+    exactly 0, which closes ``investigate`` and opens ``talk`` -- measured with a
+    cursor moving 3 px/frame: investigate 24 % at 1 tick/frame, 2 % at 2+.
+    """
+    from iterator_pet.platform.pet_window import PetWindow
+
+    order: list[str] = []
+
+    class Fake:
+        simulation = type("S", (), {"step": lambda self, dt: order.append("step")})()
+
+        def _track_cursor(self):
+            order.append("cursor")
+
+    PetWindow._step_once(Fake(), 1.0 / C.GAME_HZ)
+    assert order == ["cursor", "step"], f"wrong order per tick: {order}"
+
+    # ... and the loop must actually be driven with it. Handing ``advance`` the
+    # bare ``simulation.step`` is the bug this pins.
+    source = inspect.getsource(PetWindow._tick)
+    assert "self._step_once" in source, (
+        "the fixed-step loop is not driven through _step_once any more")
+    assert "self.simulation.step" not in source, (
+        "the loop is being handed the raw step again (one cursor sample per frame)")

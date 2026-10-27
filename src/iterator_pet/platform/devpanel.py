@@ -16,7 +16,7 @@ back into the simulation.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 
@@ -47,12 +47,13 @@ def dev_lines(simulation) -> list[str]:
         # running: the draw happened at the last boundary, and the weights have
         # been drifting since. That is what the weight row below is for.
         ("behaviour", f'{s["behaviour"]}  (lead {leader})'
-                      f'  {s["held_ticks"]}/{s["segment"]}t'),
+                      f'  {s["held_ticks"]}/max {s["segment"]}t'),
         ("weights", "  ".join(f"{name[:4]} {weights.get(name, 0):.2f}" for name in order)),
         ("freshness", "  ".join(f"{name[:4]} {s['freshness'].get(name, 0):.2f}"
                                 for name in order)),
         ("draws", f'{s["draws"]}  eligible '
-                  f'{", ".join(s["eligible"]) or "-"}'),
+                  f'{", ".join(s["eligible"]) or "-"}'
+                  + (f'  excl {s["excluded"]}' if s.get("excluded") else "")),
         ("cursor", "none" if cursor is None
          else f'({cursor[0]:.0f}, {cursor[1]:.0f})  still {s["still_ticks"]}t'
               + (f'  cd {s["talk_cooldown"]}t' if s["talk_cooldown"] else "")),
@@ -93,6 +94,11 @@ class DevPanel(QWidget):
         # Wide enough for the two 3-number rows (weights / freshness) at the
         # 1.5x DPI this machine runs: at 430 px the freshness row was clipped at
         # "talk fresh", i.e. the panel was silently hiding a number.
+        # The position is whatever the window manager picks -- DO NOT call
+        # move()/setGeometry() on this window: on this machine that left it
+        # mapped but never painted (three attempts, _work/panel-on-top*.png),
+        # so an off-screen-corner panel is the lesser evil. It has a title bar,
+        # so a human can drag it.
         self.resize(470, 340)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self.refresh)

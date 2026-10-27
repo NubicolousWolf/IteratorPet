@@ -242,7 +242,10 @@ class BehaviourSelector:
         self.weights: dict[str, float] = {}
         self.eligible: tuple[str, ...] = ()
         self.draws = 0
-        self.last_roll: tuple[float, float] | None = None
+        # The mood the last draw was not allowed to pick (the hand-over rule).
+        # Shown in the panel: without it a gated mood and an excluded mood both
+        # read as weight 0.00 and the two mean opposite things.
+        self.excluded: str | None = None
 
     # -- inputs ------------------------------------------------------------
     def observe_cursor(self, cursor: tuple[float, float] | None) -> float:
@@ -262,7 +265,13 @@ class BehaviourSelector:
         if speed <= C.SCORE_MOTION_MIN:
             self.still_ticks += 1
         else:
-            self.still_ticks = 0
+            # DECAY, not reset. The gate is still the single 0 px/tick line the
+            # user asked for, but the hover RAMP behind talk's weight is a 90 s
+            # quantity: resetting it on one optical-mouse count (a 0.01 px jitter)
+            # threw away the whole warm-up, so a hand resting on a mouse never
+            # warmed up at all (measured: 5 Hz x 0.01 px -> talk 3.9 % of the
+            # time instead of 25 %). Losing ~1 s per jitter is the compromise.
+            self.still_ticks = max(0, self.still_ticks - C.STILL_DECAY_TICKS)
         return speed
 
     # -- gates -------------------------------------------------------------
@@ -329,10 +338,13 @@ class BehaviourSelector:
         """Roulette over the eligible moods; the one that just ended hands over.
 
         ``exclude`` is the mood whose segment has just run out. Without it a mood
-        could re-draw itself and the segment length would be a lie: talk measured
-        runs of 800, 1600 and 2400 ticks, and because the 60 s cooldown is only
-        started when something ELSE is drawn, a self-renewing conversation never
-        started its cooldown at all (measured: 28.7 % talk instead of 25 %).
+        could re-draw itself and the segment length would be a lie: on the build
+        with an 800-tick talk segment, talk ran 800 / 1600 / 2400 ticks, and
+        because the 60 s cooldown is only started when something ELSE is drawn, a
+        self-renewing conversation never started its cooldown at all -- talk then
+        took 28.7 % of a parked run on seed 20261027 (8 seeds 26.2-37.8 %). On the
+        shipped 900-tick segment the same hole gives 30.0 % / 27.5-38.8 %, i.e.
+        more talk than the target on every seed.
         Roaming is exempt -- it is the source's Idle, the state the pet is in when
         there is nothing else to do, and it has to be able to simply continue.
         """
@@ -344,7 +356,6 @@ class BehaviourSelector:
         total = sum(weights[name] for name in eligible)
         if eligible and total > 0.0:
             roll = self.rng.random() * total
-            self.last_roll = (roll, total)
             acc = 0.0
             for name in eligible:
                 acc += weights[name]
@@ -354,12 +365,15 @@ class BehaviourSelector:
             if winner is None:
                 winner = eligible[-1]
         if winner is None:
-            # Nothing is eligible (talk cooling down, cursor still, roaming
-            # drained). The source's Idle is the resting state, so this is not a
-            # tie-break -- it is the floor of the state machine.
+            # Defensive only: ``gate("roaming")`` is True with and without a
+            # cursor and its weight is floored at FRESHNESS_FLOOR, so ``eligible``
+            # is never empty and ``total`` is never 0 (checked over 4 cursor
+            # modes x 12000 ticks: 0 occurrences). If it ever fires, the source's
+            # Idle is the resting state.
             winner = "roaming"
         self.weights = weights
         self.eligible = eligible
+        self.excluded = exclude if exclude in eligible else None
         self.draws += 1
         if self.behaviour == "talk" and winner != "talk":
             self.talk_cooldown = C.TALK_COOLDOWN_TICKS
@@ -382,6 +396,12 @@ class BehaviourSelector:
             return self.behaviour
         if self._segment_ended(body, cursor, cursor_speed):
             self._draw(body, cursor, cursor_speed, exclude=self.behaviour)
+            # ``_draw`` zeroes the excluded mood so the roulette cannot pick it.
+            # Publish what the NEXT draw would weigh instead, and name the
+            # exclusion separately -- otherwise the panel shows an eligible mood
+            # at 0.00, which everywhere else means "gate shut".
+            self.weights = self.weights_for(body, cursor, cursor_speed)
         else:
             self.ticks += 1
+            self.excluded = None
         return self.behaviour
