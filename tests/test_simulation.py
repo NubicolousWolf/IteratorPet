@@ -121,3 +121,37 @@ def test_gown_keeps_its_proportions():
     # ideal shape is ~22 wide by ~23 tall in game pixels
     assert 15.0 < width < 40.0
     assert 15.0 < height < 40.0
+
+def test_puppet_roams_the_whole_chamber():
+    """Regression for "the pet only ever sits in the bottom-right corner".
+
+    The failure was structural, not a tuning problem: destinations were sampled
+    inside a 260 px disc around the carriage, and the carriage's own target was
+    the rail station minimising ``|dist(station, nextPos) - 200|`` -- a ring that
+    on a 776x415 chamber can only reach the right and bottom edges. Measured
+    then: carriage on the right edge 90.2 % of ticks, left and top 0 %.
+
+    What must hold now:
+      * the puppet covers most of the screen width and both halves,
+      * the carriage visits all four rail edges,
+      * the puppet never leaves the arm's reach (570 px) -- the reason the
+        carriage follows the puppet in the first place.
+    """
+    width, height = 776.0, 415.0
+    sim = SimulationState((0.0, 0.0, width, height))
+    xs, edges, worst = [], set(), 0.0
+    for tick in range(2400):
+        sim.step(0.025)
+        if tick % 4:
+            continue
+        xs.append(sim.creature.chunk0[0])
+        edges.add(int(sim.frame_pos) % 4)
+        worst = max(worst, C.dist(sim.rail.pose(sim.frame_pos).point, sim.creature.chunk0))
+
+    covered = (max(xs) - min(xs)) / width
+    left_half = sum(1 for x in xs if x < width * 0.5) / len(xs)
+    assert covered > 0.55, f"puppet only covers {covered:.0%} of the screen width"
+    assert 0.25 < left_half < 0.75, f"{left_half:.0%} of ticks on the left half -- lopsided"
+    assert len(edges) == 4, f"carriage only visited edges {sorted(edges)}"
+    reach = sum(C.ARM_LENGTHS)
+    assert worst <= reach, f"puppet reached {worst:.0f} px from the carriage, arm is {reach:.0f}"

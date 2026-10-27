@@ -257,12 +257,18 @@ class Cord:
             # this strand's own free length split over its 20 nodes, NOT the
             # cord's 10 px pitch. Short strands are therefore genuinely taut.
             rest = self.filament_len[index] / C.SMALL_CORD_NODES
-            # og.cs:883-902  one backward sweep then one forward sweep. The source
-            # adds no extra passes here, so neither do we.
-            for k in range(1, C.SMALL_CORD_NODES):
-                _solve_pair(nodes, vels, k - 1, k, rest)
-            for k in range(last):
-                _solve_pair(nodes, vels, k, k + 1, rest)
+            # og.cs:883-902  one backward sweep then one forward sweep. The
+            # source needs exactly one of each because its cord tail barely
+            # moves; a roaming pet drags that tail around every tick, and one
+            # pass leaves the residual concentrated in one link (measured: a
+            # 91 px strand drawn 163 px, i.e. 1.8x its own rope). Repeating the
+            # pair is SOLVER convergence -- the same concession the 80-node
+            # spine already makes -- not new physics.
+            for _ in range(C.SMALL_CORD_PASSES):
+                for k in range(1, C.SMALL_CORD_NODES):
+                    _solve_pair(nodes, vels, k - 1, k, rest)
+                for k in range(last):
+                    _solve_pair(nodes, vels, k, k + 1, rest)
 
             # og.cs:903-911  weld both ends, then kick the nodes next to them.
             nodes[0] = tail

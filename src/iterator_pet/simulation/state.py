@@ -105,27 +105,25 @@ class SimulationState:
         self._bounds = bounds
         self.rail = RailPath(self._inset())
         self.wander = Wander(self._inset(), seed=seed)
+        self.wander.clamp = self._clamp_destination
         # Destinations are pulled into the arm's reach of their nearest rail
         # station, so a point on the far side of a wide screen does not leave the
         # body leaning on the reach limit for the whole hop.
 
+        # ``baseIdeal`` is a ROOM POINT -- the puppet's own position -- which is
+        # then projected onto the rail. ``start/stop_threshold`` are the source's
+        # 350/50 px hysteresis scaled to this chamber (see constants).
         self.base_ideal = self.wander.current
-        self.start_threshold = 160.0
-        self.stop_threshold = 24.0
-        self.ideal_tolerance = 190.0
         self.body_target: tuple[float, float] | None = None
         self.drag_mode: str | None = None
-        self.station_timer = 0
-        self.base_cooldown = 0
-        self._wander_radius = 260.0
-        self.station_f = 0.0
         self.rng = __import__("random").Random(seed)
         self.drag_point: tuple[float, float] | None = None
         self._refresh_thresholds()
         self.frame_pos = self.rail.project(self.wander.current)
-        self.station_f = self.frame_pos
         self.base_moving = False
-        self.stable_ticks = 0
+        self.consistent_base_pos = 0
+        self._dest_version = self.wander.version
+        self._last_chunk0 = self.wander.current
 
         base_pose = self.rail.pose(self.frame_pos)
         self.arm = ArmChain(base_pose.point)
@@ -150,11 +148,14 @@ class SimulationState:
         return (x + inset, y + inset, max(40.0, w - 2 * inset), max(40.0, h - 2 * inset))
 
     def _refresh_thresholds(self) -> None:
+        # oracle.cs:327 hard-codes 350 / 50 px for a 1400 px wide room; here they
+        # are ratios of the chamber diagonal (0.30 / 0.036 -> ~264 / ~32 px on a
+        # 776x415 chamber). 0.30 rather than 0.40 so the carriage starts moving
+        # BEFORE the puppet leaves the 353 px arm's reach.
         _, _, w, h = self._inset()
-        span = max(w, h)
+        span = hypot(w, h)
         self.start_threshold = C.BASE_MOVE_START_RATIO * span
         self.stop_threshold = C.BASE_MOVE_STOP_RATIO * span
-        self.ideal_tolerance = C.BASE_IDEAL_RATIO * span
 
     def resize(self, bounds: tuple[float, float, float, float]) -> None:
         self._bounds = bounds
@@ -218,60 +219,84 @@ class SimulationState:
         # ``consistentBasePosCounter`` gate: the source only asks for a new
         # destination once the assembly is settled, so the same test decides
         # whether the wander may start its next drift.
-        down = self.creature.body_dir
-        tilt = abs(degrees(atan2(down[0], down[1])))
-        settled = tilt < C.WANDER_SETTLED_DEG
-        self.wander.update(self.cursor, base=pose_now.point, radius=self._wander_radius,
-                           tangent=pose_now.tangent, settled=settled)
+        # ``settled`` decides when the wander may pick a new destination, and the
+        # old test -- "is the body axis vertical" -- was a trap: a body that is
+        # travelling ALWAYS leans (chunk 0 gets 6.2 of impulse, chunk 1 only 3.2),
+        # so it was never settled, the wander re-targeted on the WANDER_HOLD_CAP
+        # timeout instead, and the puppet travelled forever in 160-tick bursts.
+        # The question the gate actually asks is "has the assembly come to rest",
+        # so measure that: tick-to-tick body speed.
+        body_speed = C.dist(self._last_chunk0, self.creature.chunk0)
+        self._last_chunk0 = self.creature.chunk0
+        settled = body_speed < C.WANDER_SETTLED_SPEED
+        self.wander.update(self.cursor, settled=settled)
         get_to = self.wander.get_to()
         get_to_dir = self.wander.get_to_dir()
 
-        # ---- base: hysteresis + at most 1° of a quadrant per tick --------
-        self.stable_ticks += 1
+        # ---- base: the puppet leads, the carriage follows (oracle.cs:327-331) --
+        # baseMoving = Distance(BasePos, baseIdeal) > (baseMoving ? 50f : 350f)
+        #              && consistentBasePosCounter > 30;
+        # if (baseMoving) framePos = MoveTowardsAngle(framePos*90, target*90, 1)/90;
+        #
+        # This is the design three documents describe (plan:22, HANDOFF:69,
+        # motion-spec:1.2) and what an earlier version of this file did: the
+        # carriage parks and only re-sites when the PUPPET has drifted past
+        # ``start_threshold``. The version that replaced it scored 64 rail
+        # stations against ``|dist(station, nextPos) - 200|``, which on a
+        # 776x415 chamber can only ever resolve to the right/bottom edge -- that
+        # is what pinned the pet to one corner (see AGENTS.md 6.1).
+        if self.wander.version != self._dest_version:
+            self._dest_version = self.wander.version
+            self.consistent_base_pos = 0
+        self.consistent_base_pos += 1
 
-        # The puppet leads, the base follows.  The carriage only re-sites when the
-        # station 200 px from the destination is far away, which is what makes it
-        # move in occasional hops instead of chasing every twitch.
+        self.base_ideal = self.creature.chunk0
+        ideal_f = self.rail.project_near(self.base_ideal, self.frame_pos)
+        # The hysteresis must be measured in RAIL ARC LENGTH, not in a straight
+        # line. The source compares Distance(BasePos, baseIdeal) in a 560x560
+        # room where the chord is close to the arc; on a 776x415 chamber a 264 px
+        # chord can be half a quadrant of travel (1190 px), and the carriage --
+        # 1 degree per tick -- then needs 45-180 ticks to arrive while the puppet
+        # keeps drifting. Measured with the chord version: base->body p95 421 px,
+        # max 627. Arc length is what the carriage actually has to drive.
         base_point = self.rail.pose(self.frame_pos).point
-        _, _, cw, ch = self._inset()
-        span = hypot(cw, ch)
-        ideal_f = self.frame_pos
-        best_err = 1e9
-        for i in range(64):
-            f = i * 4.0 / 64.0
-            err = abs(C.dist(self.rail.pose(f).point, self.wander.next) - 200.0)
-            if err < best_err:
-                best_err, ideal_f = err, f
-
-        gap = C.dist(base_point, self.rail.pose(ideal_f).point)
-        if gap > span * 0.28:
-            speed = C.BASE_SPEED_SLOW if gap < span * 0.50 else C.BASE_SPEED_FAST
-        else:
-            speed = 0.0
-
-        self.last_base_speed = speed
-        if speed > 0.0:
-            target_f = ideal_f
-            self.base_moving = True
-        else:
-            target_f = self.frame_pos
-            self.base_moving = False
-
-        if self.base_moving and speed > 0.0:
+        # ``Distance(BasePos, baseIdeal)`` -- the source's own chord measure.
+        gap = C.dist(base_point, self.creature.chunk0)
+        # Hard physical override. The arm is 570 px (300+150+90+30); once the
+        # puppet is further than 90 % of that from the carriage the arm simply
+        # cannot hold it, whatever the hysteresis and the 30-tick gate say. The
+        # source never needs this because its room (560x560) is about one arm
+        # long; a 776x415 chamber is wider, so the carriage has to be allowed to
+        # break its own hysteresis to stay within reach.
+        must_follow = gap > sum(C.ARM_LENGTHS) * C.BASE_FOLLOW_ARM_RATIO
+        reach = self.stop_threshold if self.base_moving else self.start_threshold
+        self.base_moving = (must_follow or gap > reach) and (
+            must_follow or self.consistent_base_pos > C.BASE_STABLE_TICKS
+        )
+        if self.base_moving:
             self.frame_pos = move_towards_angle(
-                self.frame_pos * 90.0, target_f * 90.0, speed
+                self.frame_pos * 90.0, ideal_f * 90.0, C.BASE_MOVE_SPEED_DEG
             ) / 90.0
             self.frame_pos %= 4.0
 
         # ---- arm drives the body ----------------------------------------
-        # The game updates the body chunks inside OracleArm.Update *before*
-        # the joints chase them, so the limb always aims at a fresh target.
-        self.creature.step(get_to, get_to_dir, self.wander.look_point)
+        # ``OracleGetToPos`` (ss.cs:3122-3133) is ONE clamped goal, and the game
+        # feeds it to BOTH the trunk and the arm:
+        #     get => ClampVectorInRoom(floatyMovement && near(nextPos,50) ? nextPos : currentGetTo)
+        # So the body chases the clamped point, not the raw Bezier. Clamping only
+        # the arm (which is what this port used to do) lets the body outrun its own
+        # limb: measured base->body up to 652 px against a 570 px arm, and the
+        # trunk then trails flat. Two clamps, in this order:
+        #   1. into the chamber   (ClampVectorInRoom, ss.cs:4298)
+        #   2. inside the arm     (ARM_REACH_RATIO * 570 = 541 px from the base)
+        # Because the carriage then follows the body, a full-screen destination is
+        # still reachable -- it just takes two phases: the body pushes against the
+        # reach limit, the carriage catches up, the limit slides out.
         pose = self.rail.pose(self.frame_pos)
-        # Keep the *goal* reachable, not just the body. The game's room AI only
-        # picks destinations the arm can cover; asking for a point outside the
-        # reach is what made the limb fight the body every tick.
-        get_to = self._reachable(pose.point, get_to)
+        # The destination was already clamped when it was picked, so ``get_to`` is
+        # reachable; only the room has the last word (ClampVectorInRoom).
+        get_to = self._clamp_to_room(get_to)
+        self.creature.step(get_to, get_to_dir, self.wander.look_point)
         self.arm.update(
             pose.point, self.creature.chunk0, self.creature.chunk1,
             get_to_dir, self.base_moving, bounds=self._inset(),
@@ -292,29 +317,50 @@ class SimulationState:
         self._prev = self._cur
         self._cur = self._compose()
 
+    def _rail_gap(self, a: float, b: float) -> float:
+        """Shorter arc length between two ``framePos`` values, in chamber px."""
+        _, _, w, h = self._inset()
+        per_quadrant = 2.0 * (w + h) / 4.0
+        delta = (a - b) % 4.0
+        if delta > 2.0:
+            delta = 4.0 - delta
+        return delta * per_quadrant
+
+    def _clamp_destination(self, point: tuple[float, float]) -> tuple[float, float]:
+        """Pull a freshly picked destination inside the arm's reach of the carriage.
+
+        Called once per ``SetNewDestination``. ``_reachable`` does the same job for
+        the arm every tick, but applying it to the body's GOAL every tick makes the
+        goal slide with the carriage; a destination clamped at pick time is a fixed
+        point the body can reach, stop on, and rest against.
+        """
+        root = self.rail.pose(self.frame_pos).point
+        limit = C.ARM_LENGTHS_TOTAL * C.DESTINATION_REACH_RATIO
+        distance = C.dist(root, point)
+        if distance > limit and distance >= 1e-6:
+            direction = C.dir_vec(root, point)
+            point = (root[0] + direction[0] * limit, root[1] + direction[1] * limit)
+        return self._clamp_to_room(point)
+
+    def _clamp_to_room(self, point: tuple[float, float], margin: float = 10.0) -> tuple[float, float]:
+        """``SSOracleBehavior.ClampVectorInRoom`` (ss.cs:4298-4305).
+
+        ``result.x = Clamp(x, corner[0].x + 10, corner[1].x - 10)`` and likewise for
+        y between corner 2 and corner 1 -- i.e. the inset rectangle grown in by 10 px.
+        """
+        x, y, w, h = self._inset()
+        return (
+            min(max(point[0], x + margin), x + w - margin),
+            min(max(point[1], y + margin), y + h - margin),
+        )
+
     def _reachable(self, root: tuple[float, float], target: tuple[float, float]) -> tuple[float, float]:
-        limit = sum(C.ARM_LENGTHS) * 0.62
+        limit = sum(C.ARM_LENGTHS) * C.ARM_REACH_RATIO
         distance = C.dist(root, target)
         if distance <= limit or distance < 1e-6:
             return target
         direction = C.dir_vec(root, target)
         return (root[0] + direction[0] * limit, root[1] + direction[1] * limit)
-
-    def _leash(self, root: tuple[float, float]) -> None:
-        limit = sum(C.ARM_LENGTHS) * 0.72
-        chunk0 = self.creature.chunk0
-        direction = C.dir_vec(root, chunk0)
-        distance = C.dist(root, chunk0)
-        if distance <= limit or distance < 1e-6:
-            return
-        target = (root[0] + direction[0] * limit, root[1] + direction[1] * limit)
-        delta = (target[0] - chunk0[0], target[1] - chunk0[1])
-        c = self.creature
-        c.chunk0 = target
-        c.chunk1 = (c.chunk1[0] + delta[0], c.chunk1[1] + delta[1])
-        c.head = (c.head[0] + delta[0], c.head[1] + delta[1])
-        c.hands = [(h[0] + delta[0], h[1] + delta[1]) for h in c.hands]
-        c.feet = [(f[0] + delta[0], f[1] + delta[1]) for f in c.feet]
 
     def _filaments(self) -> list[list[tuple[float, float]]]:
         """The 14 strand node lists, straight out of ``Cord``.

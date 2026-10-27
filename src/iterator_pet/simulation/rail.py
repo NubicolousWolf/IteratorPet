@@ -132,6 +132,38 @@ class RailPath:
                 best_f = index + C.CORNER_BLEND + t * (1.0 - 2.0 * C.CORNER_BLEND)
         return best_f % 4.0
 
+    def project_on_edge(self, point: tuple[float, float], quadrant: int) -> float:
+        """``framePos`` of the foot of the perpendicular on ONE edge."""
+        quadrant %= 4
+        a, b = self.edges[quadrant]
+        r = self.radius
+        dlen = max(1e-9, hypot(b[0] - a[0], b[1] - a[1]))
+        ux, uy = (b[0] - a[0]) / dlen, (b[1] - a[1]) / dlen
+        sx, sy = a[0] + ux * r, a[1] + uy * r
+        span = max(1e-9, dlen - 2.0 * r)
+        t = max(0.0, min(1.0, ((point[0] - sx) * ux + (point[1] - sy) * uy) / span))
+        return quadrant + C.CORNER_BLEND + t * (1.0 - 2.0 * C.CORNER_BLEND)
+
+    def project_near(self, point: tuple[float, float], current_f: float,
+                     margin: float = 60.0) -> float:
+        """Nearest perimeter point, biased to the edge the carriage is already on.
+
+        ``project`` is discontinuous across the four diagonal bisectors: a puppet
+        standing near the middle of a 776x415 chamber makes the foot of its
+        perpendicular jump between adjacent edges, and the target then flips up to
+        180 degrees -- the carriage needs 180 ticks to come round, so it never
+        settles (measured: base in motion on 55 % of ticks, and the body trailed
+        sideways on the sliding goal, tilt p90 90 deg). Keep the CURRENT edge
+        unless another one is clearly closer.
+        """
+        best = self.project(point)
+        edge = self.project_on_edge(point, int(current_f) % 4)
+        best_point = self.pose(best).point
+        edge_point = self.pose(edge).point
+        d_best = hypot(best_point[0] - point[0], best_point[1] - point[1])
+        d_edge = hypot(edge_point[0] - point[0], edge_point[1] - point[1])
+        return edge if d_edge <= d_best + margin else best
+
     def sample(self, count: int = 240) -> list[tuple[float, float]]:
         return [self.pose(4.0 * i / count).point for i in range(count)]
 

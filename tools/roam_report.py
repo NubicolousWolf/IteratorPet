@@ -66,10 +66,14 @@ edges = ("top   ", "right ", "bottom", "left  ")
 for q in range(4):
     print(f"  station on {edges[q]} edge  {100*hist.get(q,0)/n:5.1f} %")
 
-# how far can it ever get from where it is now?
-print(f"\nwander radius          {sim._wander_radius:.0f} px around the base")
-print(f"reachable clamp        {sum(C.ARM_LENGTHS)*0.62:.0f} px around the base")
-print(f"leash                  {sum(C.ARM_LENGTHS)*0.72:.0f} px around the base")
-print(f"base dead zone         {hypot(w, h)*0.28:.0f} px (span*0.28)")
+# carriage vs puppet, and the reach budget
+print()
+print(f"carriage start / stop  {sim.start_threshold:.0f} / {sim.stop_threshold:.0f} px"
+      f"   (ratios {C.BASE_MOVE_START_RATIO} / {C.BASE_MOVE_STOP_RATIO})")
+print(f"carriage speed         {C.BASE_MOVE_SPEED_DEG} deg/tick   stable gate {C.BASE_STABLE_TICKS} ticks")
+print(f"must-follow override   {sum(C.ARM_LENGTHS)*C.BASE_FOLLOW_ARM_RATIO:.0f} px from the carriage")
+print(f"destination clamp      {C.ARM_LENGTHS_TOTAL*C.DESTINATION_REACH_RATIO:.0f} px from the carriage"
+      f"   (arm {C.ARM_LENGTHS_TOTAL:.0f})")
+print(f"dwell / hold cap       {C.WANDER_DWELL_TICKS} / {C.WANDER_HOLD_CAP} ticks")
 print(f"destination spread     x {min(d[0] for d in dests):.0f}..{max(d[0] for d in dests):.0f}"
       f"  y {min(d[1] for d in dests):.0f}..{max(d[1] for d in dests):.0f}")

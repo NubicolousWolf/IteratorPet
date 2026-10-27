@@ -43,8 +43,15 @@ BODY_HANG_DIR = (0.0, -1.0)
 # ``nextPos``. The port re-scored a destination every time one was reached, so
 # the trunk was always being dragged. Hold the destination until the body axis
 # is back upright, with this cap so the pet can never park forever.
+# Minimum rest at a destination before the next one is picked (3 s at 40 TPS),
+# then HOLD_CAP is the hard ceiling while the pose has not settled.
+WANDER_DWELL_TICKS = 120
 WANDER_HOLD_CAP = 160      # 4 s at 40 TPS
-WANDER_SETTLED_DEG = 6.0   # "upright enough" to start the next drift
+# "Come to rest" gate for picking the next destination. It used to be an axis
+# angle, which a travelling body can never satisfy (see state._advance), so the
+# pet drifted in 160-tick bursts forever. Pixels per tick now.
+WANDER_SETTLED_SPEED = 1.0
+WANDER_SETTLED_DEG = 6.0   # kept for reference: the old, unusable criterion
 # The body HANGS below the rail, so it can never occupy the part of the screen
 # above its own arm. Destinations sample the full WIDTH (that is what makes the
 # carriage walk the whole perimeter) but only the lower this-fraction of the
@@ -98,14 +105,33 @@ ARM_TAIL_BIAS = 1.2        # last joint steering toward the body
 ARM_TAIL_CLAMP = 50.0
 ARM_MIN_LEN_FOLDED = 1.0   # LerpMap(dot, -1, 1, 1f, 0.2f): folded -> 1.0
 ARM_MIN_LEN_STRAIGHT = 0.2  #                                    straight -> 0.2
-# The game hard-codes 350 / 50 px for a 1400 px wide room. A desktop chamber is
-# smaller, so those become ratios -- otherwise the base can never start moving.
-BASE_MOVE_START_RATIO = 0.40   # puppet must stray far before the base re-sites
+# oracle.cs:327-331  the carriage, verbatim:
+#     baseMoving = Distance(BasePos, baseIdeal) > (baseMoving ? 50f : 350f)
+#                  && consistentBasePosCounter > 30;
+#     if (baseMoving) framePos = MoveTowardsAngle(framePos*90, num3*90, 1f)/90f;
+# 350 / 50 px are for a 1400 px wide room, so here they are ratios of the chamber
+# DIAGONAL: 0.30 / 0.036 -> ~264 / ~32 px on a 776x415 chamber. 0.30 rather than
+# 0.40 so the carriage starts moving WHILE the puppet is still inside the 353 px
+# arm's reach, instead of only after it has left it.
+BASE_MOVE_START_RATIO = 0.30   # puppet must stray this far before the base re-sites
 BASE_MOVE_STOP_RATIO = 0.036   # 50 / 1400
-BASE_IDEAL_RATIO = 0.30        # how far the puppet may stray before re-scoring
+BASE_MOVE_SPEED_DEG = 1.0      # Mathf.MoveTowardsAngle(..., 1f): 1 degree per tick
 BASE_STABLE_TICKS = 30         # consistentBasePosCounter > 30
-BASE_SPEED_SLOW = 0.12         # only when the look-ahead goal needs it
-BASE_SPEED_FAST = 0.45         # when the puppet is already out of reach
+# Design addition (not in the source): the arm is 570 px, so the carriage must
+# follow once the puppet is further than this fraction of it, ignoring the
+# hysteresis and the stability gate. The source never needs it -- its room is
+# about one arm long; a 776x415 desktop chamber is wider.
+BASE_FOLLOW_ARM_RATIO = 0.90
+# How far from the carriage the puppet may aim: 0.95 of the 570 px arm. The old
+# 0.62 (353 px) was tuned while the carriage was stuck and could not follow, so
+# every full-screen destination pressed against it.
+ARM_REACH_RATIO = 0.95
+# How far a DESTINATION may be from the carriage when it is picked: 0.62 of the
+# arm's 570 px = 353 px. Tighter than the arm on purpose -- the trunk's hang term
+# is only 9 px (BODY_CONNECTION), so a goal much further away saturates chunk 1's
+# impulse and the body loses its upright reference while travelling.
+DESTINATION_REACH_RATIO = 0.62
+ARM_LENGTHS_TOTAL = 570.0
 CORNER_BLEND = 0.1         # num2 = 0.1f ; corner arc radius = 0.1 * edge
 
 # ---------------------------------------------------------------- cord -----
@@ -130,7 +156,7 @@ CORD_SAG = 0.0             # game rooms have zero gravity; the cord is meant to 
 CORD_BUOYANCY = 1.0        # og.cs:825  vel.y += InverseLerp(0.2f, 0f, i/(n-1))
 CORD_BEND_STIFFNESS = 0.5  # num3 = 0.5f, then *= 0.75f per level
 CORD_BEND_LEVELS = (2, 3)
-CORD_SWEEP_LINKS = 16        # links resolved per constraint pass (solver convergence)
+CORD_SWEEP_LINKS = 8         # links resolved per constraint pass (solver convergence)
 # og.cs:947-950  the chitin plates are `CentipedeSegment` sprites scaled by fixed
 # factors -- there is NO pitch-dependent clamp in the source. Literal values:
 #     part 0: scaleX 0.5, scaleY 0.3      part 1: scaleX 0.4, scaleY 0.15
@@ -165,6 +191,10 @@ SMALL_CORD_DAMP_FAST = 0.9
 SMALL_CORD_TAIL_KICK = (5.0, 3.0, 1.5)   # nodes 1, 2, 3
 SMALL_CORD_HEAD_KICK = (2.0, 1.0)        # nodes 18, 17
 SMALL_CORD_HALF_WIDTH = 0.5              # og.cs:988  num3 = 0.5f
+# Constraint passes per strand per tick. The source runs one backward + one
+# forward sweep; two pairs are needed once the tail is dragged around by a
+# roaming body (solver convergence, not physics -- see cord._step_filaments).
+SMALL_CORD_PASSES = 2
 
 # --------------------------------------------------------------- gown -----
 GOWN_DIVS = 11

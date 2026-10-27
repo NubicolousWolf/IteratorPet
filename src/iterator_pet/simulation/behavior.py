@@ -41,6 +41,13 @@ class Wander:
         self.progress = 1.0
         self.follow_target: tuple[float, float] | None = None
         self.hold = 0
+        # Clamps a freshly picked destination into what the carriage can serve
+        # RIGHT NOW; set by SimulationState.
+        self.clamp = None
+        # Bumped by every ``SetNewDestination``; the carriage uses it as its
+        # ``consistentBasePosCounter`` reset (a new destination restarts the
+        # 30-tick stability gate).
+        self.version = 0
         self.look_point = (cx, cy - 40.0)
         self.pick_new_destination()
         self.progress = 1.0
@@ -59,6 +66,13 @@ class Wander:
         self.set_destination(dst)
 
     def set_destination(self, dst: tuple[float, float]) -> None:
+        # Clamped ONCE here, not every tick. Clamping the goal each tick made it
+        # slide with the carriage, so the body was dragged along a moving boundary
+        # and never arrived: it never rested, the settled gate never fired, and the
+        # trunk axis tracked the slide (tilt median 78 deg). A destination fixed
+        # at pick time is a point the body can actually reach and stop on.
+        if self.clamp is not None:
+            dst = self.clamp(dst)
         span = max(1.0, hypot(dst[0] - self.current[0], dst[1] - self.current[1]))
         self.last_handle = self._random_handle(span)
         tx, ty = self.get_to_dir()
@@ -66,6 +80,7 @@ class Wander:
         self.next_handle = (-tx * reach, -ty * reach)
         self.next = dst
         self.progress = 0.0
+        self.version += 1
 
     def _random_handle(self, span: float) -> tuple[float, float]:
         angle = self.rng.uniform(0.0, 6.28318)
@@ -76,9 +91,6 @@ class Wander:
     def update(
         self,
         cursor: tuple[float, float] | None = None,
-        base: tuple[float, float] | None = None,
-        radius: float = 240.0,
-        tangent: tuple[float, float] | None = None,
         settled: bool = True,
     ) -> None:
         span = max(1.0, hypot(self.next[0] - self.current[0], self.next[1] - self.current[1]))
@@ -109,15 +121,24 @@ class Wander:
             # until the pose has settled.
             self.current = self.next
             self.hold += 1
-            if settled or self.hold >= C.WANDER_HOLD_CAP:
+            # DWELL before re-targeting. ``SetNewDestination`` is event driven in
+            # the source (ss.cs:4290): the iterator arrives, then holds the same
+            # destination for a long time. Without the dwell the port re-targeted
+            # on the first settled tick, so the puppet travelled ~90 % of its life
+            # and its trunk -- whose 9 px hang term is swamped by the 100 px clamp
+            # the moment the goal gets far -- lay along the direction of travel
+            # (measured: tilt median 72 deg while drifting). A 3 s dwell also
+            # reads better: it drifts, it looks around, it drifts again.
+            if self.hold < C.WANDER_DWELL_TICKS:
+                pass
+            elif settled or self.hold >= C.WANDER_HOLD_CAP:
                 self.hold = 0
-                if base is not None:
-                    self.next = _point_near(self.rng, self._safe_rect(), base, radius, tangent)
-                    self.last_handle = (0.0, 0.0)
-                    self.next_handle = (0.0, 0.0)
-                    self.progress = 0.0
-                else:
-                    self.pick_new_destination()
+                # The WHOLE safe rect, exactly like the source's
+                # ``SetNewDestination(随机房间点)`` + ``ClampVectorInRoom``. The carriage
+                # follows the puppet now, so a destination on the far side of a
+                # 776 px screen is reachable -- it used to be sampled inside a
+                # 260 px disc around the base precisely because it was not.
+                self.pick_new_destination()
 
         # Gaze. ``SSOracleBehavior.lookPoint`` is simply wherever the iterator is
         # paying attention to -- the game has no distance cutoff on it, and the
@@ -130,11 +151,32 @@ class Wander:
         self.look_point = look
 
     def get_to(self) -> tuple[float, float]:
+        """``currentGetTo`` -- ``ss.cs:3569``, control points clamped.
+
+            currentGetTo = Custom.Bezier(lastPos, ClampVectorInRoom(lastPos + lastPosHandle),
+                                         nextPos, ClampVectorInRoom(nextPos + nextPosHandle),
+                                         pathProgression);
+
+        The handles are ``RNV() * Lerp(.3,.65) * dist`` -- a RANDOM direction of up to
+        65 % of the distance to the destination -- so an unclamped one throws the
+        curve well outside the chamber. Measured with the clamp missing: the body
+        reached y = 504 in a 415 px room and the trunk lay flat (tilt median 168
+        deg) because it was permanently chasing a target below the screen. A cubic
+        Bezier stays inside the convex hull of its control points, so clamping the
+        two handles keeps the whole path in the safe rect.
+        """
+        x, y, w, h = self._safe_rect()
+
+        def clamp(point: tuple[float, float]) -> tuple[float, float]:
+            return (min(max(point[0], x), x + w), min(max(point[1], y), y + h))
+
         return C.bezier(
             self.current,
-            (self.current[0] + self.last_handle[0], self.current[1] + self.last_handle[1]),
+            clamp((self.current[0] + self.last_handle[0],
+                   self.current[1] + self.last_handle[1])),
             self.next,
-            (self.next[0] + self.next_handle[0], self.next[1] + self.next_handle[1]),
+            clamp((self.next[0] + self.next_handle[0],
+                   self.next[1] + self.next_handle[1])),
             self.progress,
         )
 
@@ -151,18 +193,6 @@ class Wander:
         the puppet on its side, so this returns the portable branch.
         """
         return C.BODY_HANG_DIR
-
-
-def _point_near(rng, safe_rect, base, radius: float, tangent=None) -> tuple[float, float]:
-    # The iterator never floats outside its arm's reach, so destinations are
-    # sampled inside a disc around the rail base instead of the whole screen.
-    # BasePosScore in the source scores DISTANCE, never direction, so the
-    # destination is sampled over the full circle.
-    angle = rng.uniform(0.0, 6.28318)
-    distance = radius * (0.45 + 0.55 * rng.random())
-    point = (base[0] + cos(angle) * distance, base[1] + sin(angle) * distance)
-    x, y, w, h = safe_rect
-    return (min(max(point[0], x), x + w), min(max(point[1], y), y + h))
 
 
 def _lerp(a: float, b: float, t: float) -> float:
