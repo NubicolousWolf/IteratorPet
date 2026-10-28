@@ -64,3 +64,27 @@ def prevent_activation(window) -> bool:
         return True
     except Exception:
         return False
+
+
+def keep_on_top(window) -> bool:
+    """把窗口重新顶到 topmost 层的最前面（不抢焦点、不改尺寸）。
+
+    为什么需要：WS_EX_TOPMOST 只把窗口放进"置顶带"，带内谁在前取决于**激活顺序** ——
+    别的置顶窗口（聊天/IDE/浏览器置顶）被点一下，就会跑到我们上面，人偶就被挡住。
+    定时重提一次是这个需求的常规做法；这里用 SWP_NOACTIVATE 保证不会把焦点从用户手里抢走。
+    """
+    if sys.platform != "win32":
+        return False
+    hwnd = _hwnd(window)
+    if not hwnd:
+        return False
+    try:
+        HWND_TOPMOST = -1
+        SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE, SWP_SHOWWINDOW = 0x0001, 0x0002, 0x0010, 0x0040
+        ctypes.windll.user32.SetWindowPos(
+            hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+        return True
+    except Exception:
+        return False

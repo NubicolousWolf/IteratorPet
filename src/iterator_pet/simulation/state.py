@@ -125,7 +125,10 @@ class RenderState:
 
 
 class SimulationState:
-    def __init__(self, bounds: tuple[float, float, float, float], inset: float = 26.0, seed: int = 1234):
+    WARMUP_TICKS = 320
+
+    def __init__(self, bounds: tuple[float, float, float, float], inset: float = 26.0,
+                 seed: int = 1234, warmup: int | None = None):
         self.inset = inset
         self._bounds = bounds
         self.rail = RailPath(self._inset())
@@ -176,8 +179,11 @@ class SimulationState:
         # 要把链条拉开、把姿态摆稳，这段过渡里画出来的臂会擦出腔室（逐 tick 实测：
         # seed 1234 的 62 个出界 tick 全在 tick 0–61，最大 6 px，tick>=200 一个都没有，
         # 见 `_work/bleed_per_tick.py`）。构造期跑完，窗口第一帧就已经稳了。
-        # 代价：约 320 × 4 ms ≈ 1.3 s 启动时间。
-        for _ in range(320):
+        # 代价：约 320 × 4 ms ≈ 1.3 s 启动时间 —— 所以**切尺寸时不能同步跑**：
+        # ``warmup=0`` 先建好，再让 ``PetWindow`` 在接下来几帧里分帧补 warmup
+        # （腔室越大单 tick 越贵：2845×1520 的构造是 11.7 s，一步都不能卡在 UI 线程里）。
+        budget = self.WARMUP_TICKS if warmup is None else max(0, int(warmup))
+        for _ in range(budget):
             self._advance()
 
     # -- geometry ----------------------------------------------------------

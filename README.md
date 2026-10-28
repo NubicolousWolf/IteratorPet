@@ -8,6 +8,9 @@
 
 发布包解开后直接双击启动.exe。
 
+觉得太大 / 太小：右键托盘图标 → 尺寸：便携版（40%）· 青春版（75%）· 满血版（100%，默认）· PRO（150%）
+同一个菜单里还有「电光频率」（关 / 节能 / computing）。
+
 
 ### 首次运行 / 之后每次
 
@@ -50,6 +53,13 @@ $env:RAINWORLD_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
 
 * fp追随鼠标的行为有点问题，可能导致自己被拽离机械臂。暂时不打算修。
 * 电光看起来不太对。
+* 改了尺寸之后电光需要重新设置。
+
+## 待办事项
+
+* 点击和拖拽反应
+* 物品和对话系统
+* 其他迭代器，或自定义
 
 
 ## 许可与致谢
@@ -58,4 +68,4 @@ $env:RAINWORLD_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
 所有；本仓库不含任何游戏素材，仅在运行时从用户本机安装读取基础图元。
 
 受https://github.com/lingxiaojun/slugcatpet/ 启发，参考了这个项目的桌宠行为。
-我不懂编程，所以如果你觉得代码很烂，请责怪DSH吧。
+我不懂python，所以如果你觉得代码很烂，请责怪DSH吧。

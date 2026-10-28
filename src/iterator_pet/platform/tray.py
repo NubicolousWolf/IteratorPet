@@ -15,6 +15,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QLinearGradient, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMenu
 
+from ..config import SIZE_PRESETS
 from ..rendering.theme import DEFAULT_PALETTE
 
 TRAY_ICON_NAME = "tray.png"
@@ -103,7 +104,16 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
     menu.addAction(action_dev)
 
     menu.addSeparator()
-    spark_menu = menu.addMenu("电光频率（开发）")
+    size_menu = menu.addMenu("尺寸")
+    current_size = getattr(window, "size_preset", "full")
+    for key, (factor, label) in SIZE_PRESETS.items():
+        action_size = QAction(label, size_menu)
+        action_size.setCheckable(True)
+        action_size.setChecked(current_size == key)
+        action_size.triggered.connect(lambda _checked=False, name=key: window.set_size(name))
+        size_menu.addAction(action_size)
+
+    spark_menu = menu.addMenu("电光频率")
     current_rate = getattr(window, "spark_rate", "eco")
     for key, label in (("off", "无"), ("eco", "节能"), ("computing", "computing（1.5×）")):
         action_rate = QAction(label, spark_menu)

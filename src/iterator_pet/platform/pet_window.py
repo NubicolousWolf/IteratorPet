@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
-from ..config import Config, load, save
+from ..config import SIZE_PRESETS, Config, load, save, scale_for
 from ..rendering.canvas import PetCanvas
 from ..simulation.state import SimulationState
 from .fixed_loop import DEFAULT_MAX_SUBSTEPS, GAME_DT, FixedStepLoop
@@ -84,6 +84,14 @@ class PetWindow(PetCanvas):
             (0.0, 0.0, float(geo.width()) / zoom, float(geo.height()) / zoom)
         )
 
+        # 每秒重提一次 topmost：WS_EX_TOPMOST 只保证"在置顶带里"，带内的前后顺序会被
+        # 别的置顶窗口（聊天/IDE/浏览器）抢走，人偶就被挡住。SWP_NOACTIVATE 不抢焦点。
+        self._top_timer = QTimer(self)
+        self._top_timer.setInterval(1000)
+        self._top_timer.timeout.connect(self._keep_on_top)
+        if config.always_on_top:
+            self._top_timer.start()
+
         interval = max(4, int(1000 / max(15, config.fps)))
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -144,6 +152,44 @@ class PetWindow(PetCanvas):
                 self.simulation.bounds,
             )
         )
+
+    def _keep_on_top(self) -> None:
+        if self.config.always_on_top:
+            windows_overlay.keep_on_top(self)
+
+    # -- size ---------------------------------------------------------------
+    @property
+    def size_preset(self) -> str:
+        return getattr(self.config, "size", "full")
+
+    def set_size(self, key: str) -> None:
+        """切换尺寸档（托盘菜单）：portable 40% / youth 75% / full 100% / pro 150%。
+
+        换尺寸 = 换渲染倍率 = 换**仿真腔室**的大小，所以整个仿真要按新腔室重建
+        （rail / wander / 缆线 / 光环锚点全在仿真坐标里，就地缩放会留下旧坐标）。
+        重建是一次性的（构造时自带 320 tick 预热），代价就是一下轻微的"重摆"。
+        """
+        if key not in SIZE_PRESETS:
+            return
+        self.config.size = key
+        self.config.scale = scale_for(key)
+        self.apply_scale()
+        save(self.config)
+
+    def apply_scale(self) -> None:
+        """按当前 config.scale 重建腔室与仿真。"""
+        zoom = max(0.3, min(4.0, float(self.config.scale)))
+        self.scale = zoom
+        geo = self.geometry()
+        bounds = (0.0, 0.0, float(geo.width()) / zoom, float(geo.height()) / zoom)
+        seed = getattr(self.simulation, "seed", 1234)
+        # **不能带预热同步构造**：构造里的 320 tick 预热随腔室面积膨胀得非常厉害
+        # （1138x608 约 1.6 s，40% 档的 2845x1520 要 11.7 s —— 这就是"切尺寸卡一下"）。
+        # warmup=0 只要 0.4 ms，之后让 40 TPS 的固定步长循环自然把关节/缆线跑稳，
+        # 用户看到的是一秒左右"刚站住"的过渡，而不是整个界面冻住。
+        self.simulation = SimulationState(bounds, seed=seed, warmup=0)
+        self._last = time.perf_counter()
+        self.update()
 
     # -- controls ----------------------------------------------------------
     def toggle_pause(self) -> None:
@@ -209,7 +255,17 @@ class PetWindow(PetCanvas):
         menu.addAction(action_click)
 
         menu.addSeparator()
-        spark_menu = menu.addMenu("电光频率（开发）")
+        size_menu = menu.addMenu("尺寸")
+        for key, (factor, label) in SIZE_PRESETS.items():
+            action_size = QAction(label, size_menu)
+            action_size.setCheckable(True)
+            action_size.setChecked(self.size_preset == key)
+            action_size.triggered.connect(
+                lambda _checked=False, name=key: self.set_size(name)
+            )
+            size_menu.addAction(action_size)
+
+        spark_menu = menu.addMenu("电光频率")
         for key, label in (("off", "无"), ("eco", "节能"), ("computing", "computing（1.5×）")):
             action_rate = QAction(label, spark_menu)
             action_rate.setCheckable(True)
