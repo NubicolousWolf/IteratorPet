@@ -37,6 +37,9 @@ class PetCanvas(QWidget):
         self.scale = max(0.3, min(4.0, float(scale)))
         self._frame: QPixmap | None = None
         self._frame_key: tuple | None = None
+        # 命中测试要用的"屏幕上真正画出去的那一份"（帧缓存/alpha 会让重新插值的
+        # 结果和屏幕上差一个 tick，拿它去命中会点不准）
+        self._drawn_state = None
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -80,6 +83,7 @@ class PetCanvas(QWidget):
             frame_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             frame_painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
             state = self.simulation.interpolate(self.alpha_provider())
+            self._drawn_state = state
             draw_scene(
                 frame_painter,
                 state,

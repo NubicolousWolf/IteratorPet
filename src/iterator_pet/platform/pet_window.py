@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import sys
 import time
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -9,6 +11,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
 from ..config import SIZE_PRESETS, Config, load, save, scale_for
+from ..rendering.hit import hit_test
 from ..rendering.canvas import PetCanvas
 from ..simulation.state import SimulationState
 from .fixed_loop import DEFAULT_MAX_SUBSTEPS, GAME_DT, FixedStepLoop
@@ -39,7 +42,10 @@ def cursor_sim_point(
     into its no-cursor branch on every trip past the bottom edge. The point is
     clamped into the chamber, which is where the game would put it as well.
     """
-    if screen_rect is not None and not screen_rect.contains(global_pos):
+    # QMouseEvent 给的是 QPointF，QRect.contains 只吃 QPoint → 统一成分数坐标再比
+    if screen_rect is not None and not screen_rect.contains(
+        global_pos.toPoint() if hasattr(global_pos, "toPoint") else global_pos
+    ):
         return None
     zoom = max(1e-6, float(scale))
     x = (global_pos.x() - origin.x()) / zoom
@@ -64,6 +70,8 @@ class PetWindow(PetCanvas):
         self.config = config
         self.click_through = bool(config.click_through)
         self._paused = False
+        self._press_global = None
+        self._press_at = 0.0
         self._last = time.perf_counter()
         self._origin = (0.0, 0.0)
 
@@ -105,6 +113,7 @@ class PetWindow(PetCanvas):
             windows_overlay.set_click_through(self, True)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self.simulation.end_drag()
         self._timer.stop()
         # NO save() HERE. Every mutator (toggle_click_through / toggle_rail)
         # already persists, so closing wrote nothing new -- but a TOOL
@@ -137,7 +146,16 @@ class PetWindow(PetCanvas):
 
     def _step_once(self, dt: float) -> None:
         """One 40 TPS tick: look at the pointer, then step the physics."""
-        self._track_cursor()
+        if getattr(self.simulation, "dragging", False):
+            # 必须是**每 tick**采一次（不是每帧）：一帧能跑 1-8 个 tick，重复采样会让
+            # 第 2..N 个 tick 拿到同一个点（和 AGENTS §6.2 的"每帧采光标"同类缺陷）。
+            point = self._sim_point(QCursor.pos())
+            if point is not None:
+                self.simulation.drag_to(point)
+            if not self._left_button_down():
+                self.simulation.end_drag()
+        else:
+            self._track_cursor()
         self.simulation.step(dt)
 
     def _track_cursor(self) -> None:
@@ -156,6 +174,64 @@ class PetWindow(PetCanvas):
     def _keep_on_top(self) -> None:
         if self.config.always_on_top:
             windows_overlay.keep_on_top(self)
+
+    # -- mouse drag (P0) ----------------------------------------------------
+    def _sim_point(self, global_pos) -> tuple[float, float] | None:
+        screen = self.screen()
+        return cursor_sim_point(
+            global_pos,
+            self.pos(),
+            screen.geometry() if screen is not None else None,
+            self.scale,
+            self.simulation.bounds,
+        )
+
+    def _left_button_down(self) -> bool:
+        """Windows 下查物理按键状态：光标移出窗口后 Qt 收不到 release，靠它兜底。"""
+        if sys.platform != "win32":
+            return True
+        try:
+            return bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+        except Exception:
+            return True
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        # 穿透模式收不到事件（这里只是兜底）；暂停时禁止拖拽 —— 暂停不推进 tick，
+        # drag_point 永远不会被消费，画面上人偶不会动（审计 P0-6）。
+        if self.click_through or self._paused:
+            event.ignore()
+            return
+        point = self._sim_point(event.globalPosition())
+        kind = hit_test(self._drawn_state, point, self.scale)
+        if kind is None or kind == "base":
+            # P0 只做"抓身体"；底座的拖拽在 P1（见 docs/PLAN-drag.md §10）
+            event.ignore()
+            return
+        if not self.simulation.begin_drag("body", point):
+            event.ignore()
+            return
+        self._press_global = event.globalPosition()
+        self._press_at = time.perf_counter()
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
+        self.simulation.end_drag()
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        # 拖拽位置由 _step_once 里**每 tick** 采一次 QCursor.pos()；这里只兜住
+        # "按下后还没到下一个 tick"的那一下移动。
+        if getattr(self.simulation, "dragging", False):
+            point = self._sim_point(event.globalPosition())
+            if point is not None:
+                self.simulation.drag_to(point)
+        super().mouseMoveEvent(event)
 
     # -- size ---------------------------------------------------------------
     @property
@@ -182,6 +258,7 @@ class PetWindow(PetCanvas):
         self.scale = zoom
         geo = self.geometry()
         bounds = (0.0, 0.0, float(geo.width()) / zoom, float(geo.height()) / zoom)
+        self.simulation.end_drag()          # 拖拽中切尺寸：先结束旧会话
         seed = getattr(self.simulation, "seed", 1234)
         # **不能带预热同步构造**：构造里的 320 tick 预热随腔室面积膨胀得非常厉害
         # （1138x608 约 1.6 s，40% 档的 2845x1520 要 11.7 s —— 这就是"切尺寸卡一下"）。
@@ -193,6 +270,8 @@ class PetWindow(PetCanvas):
 
     # -- controls ----------------------------------------------------------
     def toggle_pause(self) -> None:
+        if not self._paused:
+            self.simulation.end_drag()      # 进入暂停：结束拖拽（暂停时不消费 drag_point）
         self._paused = not self._paused
         if self._paused:
             self._loop.pause()
@@ -216,6 +295,7 @@ class PetWindow(PetCanvas):
         return getattr(self.config, "spark_rate", "eco")
 
     def toggle_click_through(self) -> None:
+        self.simulation.end_drag()          # 穿透后就收不到事件了，先结束拖拽
         self.click_through = not self.click_through
         self._apply_click_through()
         self.config.click_through = self.click_through

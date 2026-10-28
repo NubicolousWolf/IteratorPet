@@ -144,6 +144,13 @@ class SimulationState:
         self.base_ideal = self.wander.current
         self.body_target: tuple[float, float] | None = None
         self.drag_mode: str | None = None
+        self.drag_offset: tuple[float, float] = (0.0, 0.0)
+        self.drag_cooldown: int = 0
+        # 最近几个 tick 的拖拽点，松手时用来算"甩"的方向与速度
+        self._drag_samples: list[tuple[int, tuple[float, float]]] = []
+        # 松手后的"甩"：自己积分一小段，不依赖 wander 的贝塞尔（那条路会把目标夹回臂展内）
+        self.fling_vel: tuple[float, float] = (0.0, 0.0)
+        self.fling_ticks: int = 0
         self.rng = __import__("random").Random(seed)
         self.drag_point: tuple[float, float] | None = None
         self._refresh_thresholds()
@@ -248,16 +255,78 @@ class SimulationState:
         if point is not None:
             self.wander.set_destination(point)
 
-    def begin_drag(self, mode: str = "puppet") -> None:
-        self.drag_mode = mode
-        self.drag_point = None
+    def begin_drag(self, mode: str = "body", point: tuple[float, float] | None = None) -> bool:
+        """开始拖拽。``point`` 是按下时光标的仿真坐标，用来记抓取偏移（人偶不会跳到光标下）。
 
-    def drag_to(self, point: tuple[float, float]) -> None:
+        返回 False 表示当前不能拖（冷却中）。``mode`` 只区分 "body" / "base"，
+        抓头/抓躯干在物理上是同一件事：拖 ``chunk0``（头被 _weld 焊在 chunk0 上方 8 px）。
+        """
+        if self.drag_cooldown > 0:
+            return False
+        self.drag_mode = mode
         self.drag_point = point
+        if point is not None:
+            self.drag_offset = (
+                self.creature.chunk0[0] - point[0],
+                self.creature.chunk0[1] - point[1],
+            )
+        else:
+            self.drag_offset = (0.0, 0.0)
+        return True
+
+    def drag_to(self, point: tuple[float, float] | None) -> None:
+        self.drag_point = point
+        if point is not None:
+            self._drag_samples.append((self.ticks, point))
+            if len(self._drag_samples) > 5:
+                del self._drag_samples[0]
 
     def end_drag(self) -> None:
+        if self.drag_mode is None:
+            return
         self.drag_mode = None
         self.drag_point = None
+        self.drag_cooldown = C.DRAG_COOLDOWN_TICKS
+        # 松手：顺着**最后几个 tick 的拖动方向**再走一段（这就是用户要的"惯性"）。
+        # 不能靠速度：creature.step 每 tick 把 vel *= 0.4*0.99，任何初速 2 tick 就没了
+        # （实测 30 px/tick 只滑 ~50 px 且方向不可控）→ 直接给一个目的地更可控。
+        chunk0 = self.creature.chunk0
+        self.fling_vel = (0.0, 0.0)
+        self.fling_ticks = 0
+        if len(self._drag_samples) >= 2:
+            first_tick, first_point = self._drag_samples[0]
+            last_tick, last_point = self._drag_samples[-1]
+            spans = max(1, last_tick - first_tick)
+            vx = (last_point[0] - first_point[0]) / spans
+            vy = (last_point[1] - first_point[1]) / spans
+            speed = hypot(vx, vy)
+            if speed > 0.6:                       # 慢拖 = 松手放下，不甩
+                cap = C.FLING_MAX_SPEED
+                scale = min(1.0, cap / speed) * C.FLING_GAIN
+                self.fling_vel = (vx * scale, vy * scale)
+                self.fling_ticks = C.FLING_TICKS
+        self._drag_samples.clear()
+        self.wander.current = chunk0
+        self.wander.next = chunk0
+        self.wander.progress = 1.0
+        self.wander.last_handle = (0.0, 0.0)
+        self.wander.next_handle = (0.0, 0.0)
+        self.wander.follow_target = None
+        self.wander.look_point = (chunk0[0], chunk0[1] - 40.0)
+
+        self.wander.version += 1
+        self._dest_version = self.wander.version
+        self.consistent_base_pos = 0
+        self._last_chunk0 = chunk0
+        self.body_target = None
+        # 光标统计也复位：否则松手第一 tick 的"速度"= 整个拖动距离，gate 关掉，
+        # 立刻触发一次抽签（AGENTS §6.2 修过同类缺陷）。
+        self.selector._last_cursor = self.cursor
+        self.selector.still_ticks = 0
+
+    @property
+    def dragging(self) -> bool:
+        return self.drag_mode is not None and self.drag_point is not None
 
     def _apply_control(self) -> None:
         if self.drag_mode == "base":
@@ -283,8 +352,47 @@ class SimulationState:
         c.hands = [(h[0] + delta[0], h[1] + delta[1]) for h in c.hands]
         c.feet = [(f[0] + delta[0], f[1] + delta[1]) for f in c.feet]
 
+    def _drag_base_and_ornaments(self) -> None:
+        """拖拽分支的尾巴：底座跟随 + 机械臂 + 缆线/袍/光环（与正常路径同一套）。"""
+        self.base_ideal = self.creature.chunk0
+        ideal_f = self.rail.project_near(self.base_ideal, self.frame_pos)
+        pose = self.rail.pose(self.frame_pos)
+        gap = C.dist(pose.point, self.creature.chunk0)
+        # 拖拽时底座必须**按缺口比例追**：常规跟随是迟滞 + 0.12/0.45 °/tick
+        # （≈ 1–4 px/tick），而鼠标一甩就是上千 px/s → 人偶瞬间被拖出臂长。
+        # 这里改成"缺口越大走得越快"，上限 DRAG_BASE_FOLLOW_DEG（≈55 px/tick）。
+        # 物理直觉：先把臂**拉直**，快满时才让底座追。所以有一个死区
+        # （DRAG_BASE_START_RATIO × 臂长），过界后速度随"超出量"平滑上升，
+        # 到 DRAG_BASE_FULL_RATIO 时给满速。之前 0.45 就起步，结果底座和人偶
+        # 一起平移、臂永远拉不直，用户看着像"底座在拖人偶"。
+        arm = sum(C.ARM_LENGTHS)
+        keep = arm * C.DRAG_BASE_START_RATIO
+        full = arm * C.DRAG_BASE_FULL_RATIO
+        if gap > keep:
+            # 用户口径：**先按正常漫游的快速档起步**（BASE_SPEED_FAST = 0.45°/tick），
+            # 随着臂越来越直再平滑升到满速。这样"看起来还有余量就突然冲刺"不会发生。
+            ratio = min(1.0, (gap - keep) / max(1.0, full - keep))
+            speed = C.BASE_SPEED_FAST + (C.DRAG_BASE_FOLLOW_DEG - C.BASE_SPEED_FAST) * ratio
+            self.frame_pos = move_towards_angle(
+                self.frame_pos * 90.0, ideal_f * 90.0, speed
+            ) / 90.0 % 4.0
+            self.base_moving = True
+            pose = self.rail.pose(self.frame_pos)
+        else:
+            self.base_moving = False
+        self.arm.update(
+            pose.point, self.creature.chunk0, self.creature.chunk1,
+            self.creature.body_dir, False, bounds=self._inset(),
+        )
+        self.cord.step(self.arm.joints[1].pos, self.arm.elbow_pos(1),
+                       self.creature.chunk0, self.creature.head, self.creature.look_dir)
+        self.gown.step(self.creature.chunk0, self.creature.body_dir, self.creature.chunk1)
+        self.halo.step(self._halo_center(), self.creature.body_dir, self.ticks)
+
     def _advance(self) -> None:
         self.ticks += 1
+        if self.drag_cooldown > 0:
+            self.drag_cooldown -= 1
         self.time = self.ticks / C.GAME_HZ
 
         self._apply_control()
@@ -306,6 +414,57 @@ class SimulationState:
         self.wander.update(self.cursor, settled=settled)
         get_to = self.wander.get_to()
         get_to_dir = self.wander.get_to_dir()
+
+        # ---- drag (P0)：拖拽时不跑行为层，目标直接就是光标 ------------------
+        # 为什么必须覆盖 get_to 而不是只改坐标：creature.step 每 tick 都会给
+        # vel0/vel1 加 6.2/3.2 px 冲量、9 px 连杆还会把误差各退一半（见
+        # docs/PLAN-drag.md §5 与审计 P0-1），只设坐标活不过一个 tick。
+        # ---- 松手后的"甩" --------------------------------------------------
+        # 为什么不走 wander：`set_destination` 会把目标夹进"底座为中心的臂展圆"，而甩的
+        # 方向正是背离底座 → 夹完就变成往回走（实测松手 10 tick 仍 -13 px）。这里自己
+        # 积分十几 tick 的刚体位移，方向就是拖动方向，衰减到停为止。
+        if self.fling_ticks > 0 and not self.dragging:
+            self._translate_creature(self.fling_vel)
+            self.fling_vel = (self.fling_vel[0] * C.FLING_DECAY,
+                              self.fling_vel[1] * C.FLING_DECAY)
+            self.fling_ticks -= 1
+            self.creature.vel0 = (0.0, 0.0)
+            self.creature.vel1 = (0.0, 0.0)
+            self.creature.head_vel = (0.0, 0.0)
+            self.creature.hand_vel = [(0.0, 0.0), (0.0, 0.0)]
+            self.creature.foot_vel = [(0.0, 0.0), (0.0, 0.0)]
+            self._drag_base_and_ornaments()
+            self._prev = self._cur
+            self._cur = self._compose()
+            return
+
+        if self.dragging:
+            target = self._clamp_to_room(
+                (self.drag_point[0] + self.drag_offset[0],
+                 self.drag_point[1] + self.drag_offset[1])
+            )
+            # 人偶不能被拖出机械臂的可达范围（老问题，拖拽时最明显：臂被拉成一条线、
+            # 人偶还在往前飞）。夹在"底座 + ARM_REACH_RATIO×臂长"的圆内，
+            # 光标继续往外时人偶会贴着这个圆滑走，底座再慢慢追上来。
+            target = self._reachable(self.rail.pose(self.frame_pos).point, target)
+            get_to = target
+            get_to_dir = self.creature.body_dir if self.creature.body_dir != (0.0, 0.0) else (0.0, 1.0)
+            look_point = (self.creature.head[0] + get_to_dir[0] * 40.0,
+                          self.creature.head[1] + get_to_dir[1] * 40.0)
+            self.last_goal = target
+            self.creature.step(get_to, get_to_dir, look_point)
+            # 刚体平移 chuck0+chunk1（连头/手/脚一起，保持相对姿态），让被抓点**精确**跟着光标：
+            # 只靠冲量追的话，快速拖动会落后几十 px。
+            delta = (target[0] - self.creature.chunk0[0], target[1] - self.creature.chunk0[1])
+            self._translate_creature(delta)
+            for attribute in ("vel0", "vel1", "head_vel"):
+                setattr(self.creature, attribute, (0.0, 0.0))
+            self.creature.hand_vel = [(0.0, 0.0), (0.0, 0.0)]
+            self.creature.foot_vel = [(0.0, 0.0), (0.0, 0.0)]
+            self._drag_base_and_ornaments()
+            self._prev = self._cur
+            self._cur = self._compose()
+            return
 
         # ---- behaviour: roaming / investigate / talk ---------------------
         # The selector is OUR addition (see constants.py); the three poses are
@@ -586,6 +745,7 @@ class SimulationState:
             "ticks": self.ticks,
             "time": round(self.time, 2),
             "behaviour": self.behaviour,
+            "drag": self.drag_mode,
             # Draw weights: what the last/next draw was choosing between. This is
             # the "probability" the selector talks about -- an argmax has no such
             # thing, which is why the panel used to show a "best" that lost.

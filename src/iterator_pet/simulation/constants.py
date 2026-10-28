@@ -576,3 +576,27 @@ def clamp_magnitude(v: tuple[float, float], limit: float) -> tuple[float, float]
     if length <= limit or length < 1e-9:
         return v
     return (v[0] / length * limit, v[1] / length * limit)
+
+# ---------------------------------------------------------------- drag -----
+# 鼠标抓取（设计增补：源码没有"抓取"概念，阈值/速度都是桌面端手感定的）。
+# 阈值单位是**屏幕像素**，进命中测试前除以 config.scale —— 四档 scale 是
+# 0.6 / 1.125 / 1.5 / 2.25，写死仿真像素会让 40% 档只剩 6 屏幕 px，点不中。
+DRAG_HIT_HEAD_PX = 18.0
+DRAG_HIT_BODY_PX = 22.0
+DRAG_HIT_BASE_PX = 26.0
+# 松手后禁止再抓的冷却（防止手抖反复抓）
+DRAG_COOLDOWN_TICKS = 12
+# 单击（按下→抬起，几乎没位移）的判定：位移 px / 时长 ms
+DRAG_CLICK_PX = 4.0
+DRAG_CLICK_MS = 250.0
+# 拖拽时底座跟随（设计增补）：臂先被拉直，超过 START 比例才开始追，到 FULL 比例给满速。
+# 本机腔室每象限 821 px / 90° → 6 °/tick ≈ 55 px/tick ≈ 2200 px/s。
+DRAG_BASE_START_RATIO = 0.90    # 臂展的 90% 才开始动（先让用户把臂拉直）
+DRAG_BASE_FULL_RATIO = 1.00     # 完全拉直时给满速
+DRAG_BASE_FOLLOW_DEG = 6.0
+# 松手"甩"：把拖动末速按 GAIN 缩放、夹到 MAX_SPEED，再积分 TICKS 个 tick（每 tick 衰减 DECAY）。
+# 设计增补：12 px/tick 初速 + 0.85 衰减 → 总共滑约 12/(1-0.85) ≈ 80 px。
+FLING_GAIN = 0.45
+FLING_MAX_SPEED = 12.0
+FLING_TICKS = 14
+FLING_DECAY = 0.85
