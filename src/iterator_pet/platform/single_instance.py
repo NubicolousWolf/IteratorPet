@@ -18,6 +18,7 @@ import time
 
 ERROR_ALREADY_EXISTS = 183
 MUTEX_NAME = "IteratorPet.SingleInstance"
+PACKAGED_IMAGE_NAME = "启动.exe"   # packaging/build.py 里的 EXE_NAME
 
 _handle = None  # 保活：句柄一关，互斥体就释放了
 
@@ -59,11 +60,13 @@ def kill_other_instances(image_name: str | None = None, wait: float = 3.0) -> in
     """
     if sys.platform != "win32":
         return 0
-    exe = os.path.basename(sys.executable)
     if image_name is None:
-        if not getattr(sys, "frozen", False):
-            return 0            # 源码运行：别乱杀 python
-        image_name = exe
+        if getattr(sys, "frozen", False):
+            image_name = os.path.basename(sys.executable)      # 打包版：杀同名 exe
+        else:
+            # 源码运行（pythonw.exe）：绝不杀 python.exe，但要杀掉**已打包的**那只，
+            # 否则从「启动.cmd」双击会变成两只。
+            image_name = PACKAGED_IMAGE_NAME
     if not image_name.lower().endswith(".exe"):
         return 0
 

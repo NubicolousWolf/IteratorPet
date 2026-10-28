@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -137,6 +138,45 @@ def main(argv: list[str] | None = None) -> int:
     window = create_window(cfg, sprites=pack)
     window.show()
     window.raise_()
+
+    # ITERATORPET_DUMP=<path>：3 秒后把"活窗口"里的关键坐标写一份 JSON。
+    # 用途：比对"源码跑 vs 打包跑"到底哪个量不一样（预览渲染是一致的，所以
+    # 差异只可能出现在屏幕几何/窗口这条路上）。
+    dump_target = os.environ.get("ITERATORPET_DUMP")
+    if dump_target:
+        from PySide6.QtCore import QTimer
+
+        def _dump_live_state() -> None:
+            import json
+
+            sim = window.simulation
+            state = sim.interpolate(1.0)
+            screen = window.screen()
+            payload = {
+                "screen_geometry": [screen.geometry().x(), screen.geometry().y(),
+                                    screen.geometry().width(), screen.geometry().height()],
+                "screen_available": [screen.availableGeometry().x(), screen.availableGeometry().y(),
+                                     screen.availableGeometry().width(), screen.availableGeometry().height()],
+                "dpr": screen.devicePixelRatio(),
+                "window_geometry": [window.x(), window.y(), window.width(), window.height()],
+                "canvas_scale": window.scale,
+                "config_scale": cfg.scale,
+                "sim_bounds": list(sim.bounds),
+                "base_point": list(state.base_point),
+                "body0": list(state.body0),
+                "head": list(state.head),
+                "joints": [list(j) for j in state.joints],
+                "cord_first": list(state.cord[0]) if state.cord else None,
+                "cord_mid": list(state.cord[len(state.cord) // 2]) if state.cord else None,
+                "cord_last": list(state.cord[-1]) if state.cord else None,
+                "cord_len": len(state.cord),
+            }
+            try:
+                Path(dump_target).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            except OSError:
+                pass
+
+        QTimer.singleShot(3000, _dump_live_state)
 
     # The panel talks to the same simulation the canvas draws. It is a Tool
     # window: it never takes focus and never feeds anything back.
