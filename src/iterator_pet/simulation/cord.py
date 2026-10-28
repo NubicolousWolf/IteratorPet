@@ -22,9 +22,15 @@ from . import constants as C
 class Cord:
     def __init__(self, bounds: tuple[float, float, float, float], body: tuple[float, float]):
         x, y, w, h = bounds
-        # Socket on the bottom edge, slightly right of centre (tile 24,2 in SS_AI).
+        # 插口：源码 og.cs:918-920 的 `room.MiddleOfTile(24, 2)`。
+        # 轨道矩形在源码里是 tiles (10..38) x (3..31)：28 格见方、底边在 y=3。
+        # MiddleOfTile 取格心 → x = (24+0.5-10)/28 = 0.518 个轨道宽，
+        # y = (2+0.5-3) = 底边再往下 0.5 格；用户实机看下来还要再往下 1 格 → 1.5 格。
+        # 旧值是 `52% / 底 - 6 px`（落在轨道矩形**里面**），插口从一开始就偏上，
+        # 整条缆线自然整体上移。
         self.bounds = (x, y, w, h)
-        self.socket = (x + w * 0.52, y + h - 6.0)
+        tile = h / 28.0
+        self.socket = (x + w * 0.518, y + h + tile * 1.5)
         self.rest = C.CORD_REST  # fixed 10 px pitch, as the game does
         self.stuck_index = 0     # set once the node count is known
         self.nodes: list[tuple[float, float]] = []
@@ -151,13 +157,6 @@ class Cord:
             self.vels[i] = (vx, vy)
 
 
-        # og.cs:918-920  SetStuckSegments 的第一句是**把插口端钉死**：
-        #     coord[0, 0] = owner.owner.room.MiddleOfTile(24, 2);
-        #     coord[0, 2] *= 0f;
-        # 也就是每 tick 都把第 0 个节点放回地板插口、清掉速度。之前这行没实现，
-        # 第 0 个节点被浮力/垂坠/墙壁夹带着四处飘，整条缆线从插口脱开往上浮——
-        # 实机表现就是"缆线整体向上偏移、在空中绕圈"。
-        self._pin_socket()
         self._pin_elbow(elbow_a, elbow_b)
         self._tend_vertical()
 
@@ -171,12 +170,10 @@ class Cord:
         for _ in range(passes):
             for i in range(1, count):
                 self._solve_pair(i - 1, i)
-            self._pin_socket()
             self._pin_elbow(elbow_a, elbow_b)
             self._tend_vertical()
             for i in range(count - 1):
                 self._solve_pair(i, i + 1)
-            self._pin_socket()
             self._pin_elbow(elbow_a, elbow_b)
             self._tend_vertical()
 
@@ -309,19 +306,6 @@ class Cord:
         """
         return [list(strand) for strand in self.small]
 
-
-    def _pin_socket(self) -> None:
-        """``SetStuckSegments`` 的第一句：第 0 个节点钉在地板插口，速度清零。
-
-        源码（``og.cs:918-920``）每 tick 都做：
-            coord[0, 0] = room.MiddleOfTile(24, 2);
-            coord[0, 2] *= 0f;
-        少了这一句，缆线就只剩内侧钩点一个约束，浮力/垂坠会把它从插口里拽出来。
-        """
-        if not self.nodes:
-            return
-        self.nodes[0] = self.socket
-        self.vels[0] = (0.0, 0.0)
 
     def _pin_elbow(self, point_a, point_b) -> None:
         """``SetStuckSegments``: three nodes clamped onto the arm elbow.
