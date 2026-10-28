@@ -108,3 +108,41 @@ def test_release_does_not_redraw_a_mood():
         sim.step(GAME_DT)
     assert sim.selector.draws == draws_before, "松手后 30 tick 内不许重新抽签"
     assert sim.behaviour == behaviour_before
+
+
+# -- P1：抓底座 ------------------------------------------------------------
+
+def test_base_drag_walks_the_carriage_along_the_rail():
+    sim = _warm()
+    start_f = sim.frame_pos
+    start_base = sim.rail.pose(sim.frame_pos).point
+    start_body = sim.creature.chunk0
+    assert sim.begin_drag("base", start_base) is True
+    assert sim.drag_mode == "base"
+    worst = 0.0
+    prev = sim.frame_pos
+    for i in range(120):
+        t = min(1.0, i / 60.0)
+        sim.drag_to((start_base[0] + (569.0 - start_base[0]) * t,
+                     start_base[1] + (26.0 - start_base[1]) * t))
+        sim.step(GAME_DT)
+        worst = max(worst, abs(((sim.frame_pos - prev + 2.0) % 4.0) - 2.0) * 90.0)
+        prev = sim.frame_pos
+    # 沿轨道走，且限速（DRAG_BASE_DRAG_DEG = 2°/tick + 一点点浮点余量）
+    assert worst <= C.DRAG_BASE_DRAG_DEG + 0.05, f"单 tick 转了 {worst:.2f}°"
+    assert abs(((sim.frame_pos - start_f + 2.0) % 4.0) - 2.0) > 0.1, "底座应该真的沿轨道走了"
+    # 身体是被机械臂拽着走，不是瞬移到光标
+    assert dist(start_body, sim.creature.chunk0) < 200.0
+
+
+def test_base_drag_keeps_the_body_within_reach():
+    sim = _warm()
+    sim.begin_drag("base", sim.rail.pose(sim.frame_pos).point)
+    worst = 0.0
+    for i in range(160):
+        # 光标沿轨道绕圈（贴着工作区边缘走）
+        sim.drag_to((30.0 + (sim.bounds[2] - 60.0) * (i % 120) / 120.0, 12.0))
+        sim.step(GAME_DT)
+        base = sim.rail.pose(sim.frame_pos).point
+        worst = max(worst, dist(base, sim.creature.chunk0))
+    assert worst <= LIMIT * 1.02 + 1.0, f"拖底座时身体离底座 {worst:.1f} px 超过臂展 {LIMIT:.0f}"

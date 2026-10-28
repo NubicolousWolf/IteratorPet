@@ -600,3 +600,6 @@ FLING_GAIN = 0.45
 FLING_MAX_SPEED = 12.0
 FLING_TICKS = 14
 FLING_DECAY = 0.85
+# P1 抓底座拖拽：直接操纵的限速（°/tick）。2° ≈ 18 px/tick ≈ 730 px/s（本机腔室
+# 每象限 821 px / 90°）。比常规漫游的 0.12/0.45 快得多，因为这是"手在拖"，不是滑车自己走。
+DRAG_BASE_DRAG_DEG = 2.0

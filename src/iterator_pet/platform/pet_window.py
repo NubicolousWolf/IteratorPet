@@ -206,11 +206,12 @@ class PetWindow(PetCanvas):
             return
         point = self._sim_point(event.globalPosition())
         kind = hit_test(self._drawn_state, point, self.scale)
-        if kind is None or kind == "base":
-            # P0 只做"抓身体"；底座的拖拽在 P1（见 docs/PLAN-drag.md §10）
+        if kind is None:
             event.ignore()
             return
-        if not self.simulation.begin_drag("body", point):
+        # 头/躯干都是拖 chunk0（头被 _weld 焊在 chunk0 上）；底座走 P1 的沿轨道拖拽
+        mode = "base" if kind == "base" else "body"
+        if not self.simulation.begin_drag(mode, point):
             event.ignore()
             return
         self._press_global = event.globalPosition()

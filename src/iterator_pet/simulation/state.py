@@ -329,21 +329,15 @@ class SimulationState:
         return self.drag_mode is not None and self.drag_point is not None
 
     def _apply_control(self) -> None:
-        if self.drag_mode == "base":
-            if self.drag_point is not None:
-                self.frame_pos = self.rail.project(self.drag_point)
-                self.base_moving = False
-                self.base_ideal = self.drag_point
-            return
-        if self.drag_mode == "puppet" and self.drag_point is not None:
-            target = self.drag_point
-            delta = (target[0] - self.creature.chunk0[0], target[1] - self.creature.chunk0[1])
-            self._translate_creature(delta)
-            for attribute in ("vel0", "vel1", "head_vel"):
-                setattr(self.creature, attribute, (0.0, 0.0))
-            self.creature.hand_vel = [(0.0, 0.0), (0.0, 0.0)]
-            self.creature.foot_vel = [(0.0, 0.0), (0.0, 0.0)]
+        """外部控制的旧入口（v0 的脚手架）。
 
+        现在拖拽完全由 ``_advance`` 里的 ``drag_mode`` 分支处理：那里要用
+        `project_near`（`project` 在腔室对角线上不连续，会把底座瞬移半圈）、
+        要夹臂展、要盖 `get_to`。这里**不能再动 frame_pos/chunk0**，
+        否则会和新分支打架（实测：这里用 `project` 把 frame_pos 从 1.332 一步
+        跳到 0.792，48.7° 的瞬移就是这么来的）。
+        """
+        return
     def _translate_creature(self, delta: tuple[float, float]) -> None:
         c = self.creature
         c.chunk0 = (c.chunk0[0] + delta[0], c.chunk0[1] + delta[1])
@@ -445,7 +439,7 @@ class SimulationState:
             self._cur = self._compose()
             return
 
-        if self.dragging:
+        if self.dragging and self.drag_mode != "base":
             target = self._clamp_to_room(
                 (self.drag_point[0] + self.drag_offset[0],
                  self.drag_point[1] + self.drag_offset[1])
@@ -528,49 +522,66 @@ class SimulationState:
         # stations against ``|dist(station, nextPos) - 200|``, which on a
         # 776x415 chamber can only ever resolve to the right/bottom edge -- that
         # is what pinned the pet to one corner (see AGENTS.md 6.1).
-        if self.wander.version != self._dest_version:
-            self._dest_version = self.wander.version
-            self.consistent_base_pos = 0
-        self.consistent_base_pos += 1
-
-        self.base_ideal = self.creature.chunk0
-        ideal_f = self.rail.project_near(self.base_ideal, self.frame_pos)
-        # The hysteresis must be measured in RAIL ARC LENGTH, not in a straight
-        # line. The source compares Distance(BasePos, baseIdeal) in a 560x560
-        # room where the chord is close to the arc; on a 776x415 chamber a 264 px
-        # chord can be half a quadrant of travel (1190 px), and the carriage --
-        # 1 degree per tick -- then needs 45-180 ticks to arrive while the puppet
-        # keeps drifting. Measured with the chord version: base->body p95 421 px,
-        # max 627. Arc length is what the carriage actually has to drive.
-        base_point = self.rail.pose(self.frame_pos).point
-        # ``Distance(BasePos, baseIdeal)`` -- the source's own chord measure.
-        gap = C.dist(base_point, self.creature.chunk0)
-        # Hard physical override. The arm is 570 px (300+150+90+30); once the
-        # puppet is further than 90 % of that from the carriage the arm simply
-        # cannot hold it, whatever the hysteresis and the 30-tick gate say. The
-        # source never needs this because its room (560x560) is about one arm
-        # long; a 776x415 chamber is wider, so the carriage has to be allowed to
-        # break its own hysteresis to stay within reach.
-        must_follow = gap > sum(C.ARM_LENGTHS) * C.BASE_FOLLOW_ARM_RATIO
-        reach = self.stop_threshold if self.base_moving else self.start_threshold
-        self.base_moving = (must_follow or gap > reach) and (
-            must_follow or self.consistent_base_pos > C.BASE_STABLE_TICKS
-        )
-        if self.base_moving:
-            # Two-tier speed (see constants.BASE_SPEED_*): slow while the body is
-            # close, fast only when the carriage has most of a quadrant left to
-            # drive. The source's literal 1 degree/tick is 249 px/s on its 560 px
-            # rail and measured 135 px/s here, which is what the user saw as the
-            # carriage racing the puppet.
-            _, _, cw, ch = self._inset()
-            remaining = abs((ideal_f - self.frame_pos + 2.0) % 4.0 - 2.0)
-            ahead = remaining * 0.5 * (cw + ch)        # px of rail left to drive
-            speed = (C.BASE_SPEED_FAST
-                     if ahead > 0.5 * hypot(cw, ch) else C.BASE_SPEED_SLOW)
+        # ---- P1：抓着滑车底座拖（直接操纵，整块跳过迟滞跟随）-------------
+        # 迟滞那一套是"人偶走了、底座该不该动"的决策；手抓在底座上时这个决策没有
+        # 意义，而且它会把 frame_pos 改回身体方向，和手对打。
+        if self.dragging and self.drag_mode == "base" and self.drag_point is not None:
+            # 目标必须用 project_near：project 在腔室四条对角平分线上不连续，
+            # 拖过中心时会整段跳到邻边（rail.py:134-192）。
+            target_f = self.rail.project_near(self.drag_point, self.frame_pos)
+            delta_deg = ((target_f - self.frame_pos + 2.0) % 4.0 - 2.0) * 90.0
+            # 限速：差得远按上限走，差得近按比例慢下来（贴着光标时不抖）
+            speed = min(C.DRAG_BASE_DRAG_DEG, max(0.35, abs(delta_deg) * 0.35))
             self.frame_pos = move_towards_angle(
-                self.frame_pos * 90.0, ideal_f * 90.0, speed
-            ) / 90.0
-            self.frame_pos %= 4.0
+                self.frame_pos * 90.0, target_f * 90.0, speed
+            ) / 90.0 % 4.0
+            self.base_moving = True
+            self.base_ideal = self.creature.chunk0
+            ideal_f = target_f
+        else:
+            if self.wander.version != self._dest_version:
+                self._dest_version = self.wander.version
+                self.consistent_base_pos = 0
+            self.consistent_base_pos += 1
+
+            self.base_ideal = self.creature.chunk0
+            ideal_f = self.rail.project_near(self.base_ideal, self.frame_pos)
+            # The hysteresis must be measured in RAIL ARC LENGTH, not in a straight
+            # line. The source compares Distance(BasePos, baseIdeal) in a 560x560
+            # room where the chord is close to the arc; on a 776x415 chamber a 264 px
+            # chord can be half a quadrant of travel (1190 px), and the carriage --
+            # 1 degree per tick -- then needs 45-180 ticks to arrive while the puppet
+            # keeps drifting. Measured with the chord version: base->body p95 421 px,
+            # max 627. Arc length is what the carriage actually has to drive.
+            base_point = self.rail.pose(self.frame_pos).point
+            # ``Distance(BasePos, baseIdeal)`` -- the source's own chord measure.
+            gap = C.dist(base_point, self.creature.chunk0)
+            # Hard physical override. The arm is 570 px (300+150+90+30); once the
+            # puppet is further than 90 % of that from the carriage the arm simply
+            # cannot hold it, whatever the hysteresis and the 30-tick gate say. The
+            # source never needs this because its room (560x560) is about one arm
+            # long; a 776x415 chamber is wider, so the carriage has to be allowed to
+            # break its own hysteresis to stay within reach.
+            must_follow = gap > sum(C.ARM_LENGTHS) * C.BASE_FOLLOW_ARM_RATIO
+            reach = self.stop_threshold if self.base_moving else self.start_threshold
+            self.base_moving = (must_follow or gap > reach) and (
+                must_follow or self.consistent_base_pos > C.BASE_STABLE_TICKS
+            )
+            if self.base_moving:
+                # Two-tier speed (see constants.BASE_SPEED_*): slow while the body is
+                # close, fast only when the carriage has most of a quadrant left to
+                # drive. The source's literal 1 degree/tick is 249 px/s on its 560 px
+                # rail and measured 135 px/s here, which is what the user saw as the
+                # carriage racing the puppet.
+                _, _, cw, ch = self._inset()
+                remaining = abs((ideal_f - self.frame_pos + 2.0) % 4.0 - 2.0)
+                ahead = remaining * 0.5 * (cw + ch)        # px of rail left to drive
+                speed = (C.BASE_SPEED_FAST
+                         if ahead > 0.5 * hypot(cw, ch) else C.BASE_SPEED_SLOW)
+                self.frame_pos = move_towards_angle(
+                    self.frame_pos * 90.0, ideal_f * 90.0, speed
+                ) / 90.0
+                self.frame_pos %= 4.0
 
         # ---- arm drives the body ----------------------------------------
         # ``OracleGetToPos`` (ss.cs:3122-3133) is ONE clamped goal, and the game
