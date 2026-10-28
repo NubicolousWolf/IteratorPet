@@ -1,21 +1,26 @@
-"""把 dist/启动 打成可直接发给玩家的 zip。
+"""把构建产物打成可直接发给玩家的 zip。
 
-产物：``dist/五块卵石-<版本>-win64.zip``，解开是一个 ``五块卵石/`` 文件夹，
-里面有 ``启动.exe``、``_internal/`` 和 ``使用说明.txt``。
+产物：``%LOCALAPPDATA%\\IteratorPet\\dist\\五块卵石-<版本>-win64.zip``
+解开是一个 ``五块卵石/`` 文件夹，里面有 ``启动.exe``、``_internal/`` 和 ``使用说明.txt``。
+
+**必须在干净目录里打包/验证**：仓库所在的 ``F:\\RainworldIteratorPet`` 带继承性的
+Low 完整性标签，exe 在里面跑会被降级到 Low IL，任务栏拒绝它注册托盘图标
+（详见 ``build.py`` 顶部）。所以这里默认跟 build 用同一个 ``%LOCALAPPDATA%`` 产物目录。
 """
 
 from __future__ import annotations
 
+import argparse
+import os
 import re
 import shutil
-import sys
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DIST = ROOT / "dist" / "启动"
-OUT_DIR = ROOT / "dist"
+DEFAULT_OUT = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "IteratorPet" / "dist"
 FOLDER = "五块卵石"
+EXE_NAME = "启动"
 
 README = """五块卵石 · 桌面宠物
 ==================
@@ -25,10 +30,10 @@ README = """五块卵石 · 桌面宠物
 双击 启动.exe 就行。
 
 第一次运行会自己找正版 Rain World（Steam 库、注册表都查一遍）。
-找不到会弹一个框：可以点「选择文件夹」指到游戏根目录
-（里面有 RainWorld.exe 和 RainWorld_Data 文件夹），
-也可以点「先用内置图元运行」——先用占位图元跑起来，之后再补：
+找不到就先用内置图元跑起来（不会再弹窗问你）；想手动指定：
     启动.exe --setup
+或者设环境变量 RAINWORLD_DIR 指向游戏根目录
+（里面有 RainWorld.exe 和 RainWorld_Data 文件夹）。
 
 之后每次运行都直接启动，不再问。
 
@@ -41,6 +46,10 @@ README = """五块卵石 · 桌面宠物
   3. 按 Ctrl+Alt+Q，任何时候都能退出。
 
 托盘菜单里还能：暂停/继续、开关鼠标穿透、开关开发者面板。
+
+**别把本文件夹放进带了"低完整性"标记的目录再运行**（极少见，一般是某些
+沙箱/下载工具建的目录）。Windows 会拒绝 Low 完整性进程注册托盘图标，
+表现就是"托盘里没有图标"。普通目录（桌面、下载、D 盘自建文件夹）都没问题。
 
 数据放在哪
 ----------
@@ -65,18 +74,24 @@ def version() -> str:
 
 
 def main() -> int:
-    exe = DIST / "启动.exe"
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", default=None, help="构建产物目录（与 build.py 一致）")
+    args = parser.parse_args()
+
+    out_dir = Path(args.out) if args.out else DEFAULT_OUT
+    dist = out_dir / EXE_NAME
+    exe = dist / f"{EXE_NAME}.exe"
     if not exe.is_file():
-        print("先跑 packaging/build.py")
+        print(f"先跑 packaging/build.py（找不到 {exe}）")
         return 2
 
-    stage = OUT_DIR / FOLDER
+    stage = out_dir / FOLDER
     if stage.exists():
         shutil.rmtree(stage)
-    shutil.copytree(DIST, stage)
+    shutil.copytree(dist, stage)
     (stage / "使用说明.txt").write_text(README, encoding="utf-8-sig")
 
-    target = OUT_DIR / f"{FOLDER}-v{version()}-win64.zip"
+    target = out_dir / f"{FOLDER}-v{version()}-win64.zip"
     if target.exists():
         target.unlink()
     count = 0

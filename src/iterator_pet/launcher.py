@@ -42,72 +42,40 @@ def _interactive() -> bool:
     return not os.environ.get("ITERATORPET_NONINTERACTIVE")
 
 
-def _already_running() -> None:
-    """第二个实例：告诉用户一声就退，别把两只宠物放桌面上。"""
+def _pick_install_folder() -> Path | None:
+    """**只在 ``--setup`` 里用**：弹文件夹选择框（用户主动要求的动作，不是启动时的意外弹窗）。"""
     if not _interactive():
-        return
-    from PySide6.QtWidgets import QMessageBox
-
-    box = QMessageBox()
-    box.setWindowTitle("五块卵石")
-    box.setIcon(QMessageBox.Icon.Information)
-    box.setText(
-        "它已经在你的桌面上了。\n\n"
-        "退出：右键托盘图标（Windows 11 可能把它折进任务栏的 ^ 里）→ 退出；"
-        "或者按 Ctrl+Alt+Q。"
-    )
-    box.exec()
-
-
-def _ask_install_dialog() -> tuple[Path | None, bool]:
-    """返回 ``(游戏目录, 是否无游戏继续)``。"""
-    if not _interactive():
-        # 没有窗口可给人点的时候不弹框：直接按"先用内置图元继续"处理。
-        _say("[setup] 非交互模式：跳过选择框，用内置图元继续")
-        return None, True
-
+        _say("[setup] 非交互模式：跳过选择框")
+        return None
     from PySide6.QtWidgets import QFileDialog, QMessageBox
-
-    box = QMessageBox()
-    box.setWindowTitle("首次运行")
-    box.setIcon(QMessageBox.Icon.Question)
-    box.setText(
-        "没有自动找到正版 Rain World。\n\n"
-        "点「选择文件夹」指到游戏根目录（里面有 RainWorld.exe 和 RainWorld_Data 文件夹）；"
-        "也可以先用内置图元跑起来，之后再放游戏目录（`启动.exe --setup`）。"
-    )
-    pick = box.addButton("选择文件夹", QMessageBox.ButtonRole.AcceptRole)
-    skip = box.addButton("先用内置图元运行", QMessageBox.ButtonRole.DestructiveRole)
-    box.addButton("退出", QMessageBox.ButtonRole.RejectRole)
-    box.exec()
-
-    if box.clickedButton() is skip:
-        return None, True
-    if box.clickedButton() is not pick:
-        return None, False
 
     while True:
         chosen = QFileDialog.getExistingDirectory(None, "选择 Rain World 文件夹")
         if not chosen:
-            return None, False
+            return None
         path = Path(chosen)
         if looks_like_install(path):
-            return path, False
+            return path
         QMessageBox.warning(None, "目录不对", describe_missing(path) + "\n\n请再选一次。")
 
 
 def _resolve_install(config: Config, *, force_setup: bool = False) -> tuple[Path | None, bool]:
-    """返回 ``(游戏目录, 是否无游戏继续)``；必要时写回配置。"""
+    """返回 ``(游戏目录, 是否无游戏继续)``；必要时写回配置。
+
+    **启动路径上绝不弹窗**（用户明确要求）：自动探测失败就记日志、用内置图元继续。
+    想手动指定，用 ``启动.exe --setup`` 或环境变量 ``RAINWORLD_DIR``。
+    """
     if not force_setup and looks_like_install(config.install):
         return Path(config.install), False
 
     found = detect_install()
     _say(f"[setup] 自动探测: {found}")
+    if found is None and force_setup:
+        found = _pick_install_folder()
+        _say(f"[setup] 手动选择: {found}")
     if found is None:
-        found, continue_without = _ask_install_dialog()
-        _say(f"[setup] 手动选择: {found}（无游戏继续={continue_without}）")
-        if found is None:
-            return None, continue_without
+        _say("[setup] 没有游戏目录，用内置图元继续（想手动指定：启动.exe --setup 或设 RAINWORLD_DIR）")
+        return None, True
     config.install = str(found)
     save(config)
     return found, False
@@ -165,12 +133,11 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
 
-    from .platform.single_instance import acquire
+    from .platform.single_instance import acquire_or_replace
 
-    if not acquire():
-        _say("[setup] 已有实例在运行，本次退出")
-        _already_running()
-        return 0
+    # 重复启动 = 重开一只：杀掉旧进程、自己上（不提示、不弹窗）。
+    if not acquire_or_replace():
+        _say("[setup] 旧实例杀不掉（可能是源码运行的 python 实例），本次照常启动")
 
     if __import__("os").environ.get("ITERATORPET_DEBUG"):
         _debug_dump()

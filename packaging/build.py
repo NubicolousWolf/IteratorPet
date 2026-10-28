@@ -5,8 +5,16 @@ exe 名会被拆成乱码当命令执行（我们已经踩过两次，报错信�
 用 ``subprocess.run(list)``，路径和中文都由 Python 处理，没有编码这一层。
 
 用法：
-    python packaging/build.py            # 全量构建（约 3 分钟）
-    python packaging/build.py --no-prune # 只构建，不删运行时
+    python packaging/build.py                 # 全量构建（约 3 分钟）
+    python packaging/build.py --no-prune      # 只构建，不删运行时
+    python packaging/build.py --out D:\\x      # 换产物目录
+
+**产物默认不放在仓库里**（``%LOCALAPPDATA%\\IteratorPet\\dist``）：
+``F:\\RainworldIteratorPet`` 带了一个继承性的 **Low 完整性标签**（早期沙箱工具建的目录），
+在里面编译出来的 exe 会被系统降级到 Low IL；任务栏是 Medium，**拒绝** Low 进程注册托盘图标
+（``Shell_NotifyIcon`` → ERROR_ACCESS_DENIED=5）。Qt 的托盘、我们自己写的 Win32 托盘、连
+30 行最小探针，只要 exe 在这棵目录树里就都没图标；从源码跑（python.exe 在 D 盘）却完全正常。
+玩家把 zip 解到桌面/下载目录不会有这个标签，我们自己的验证也必须在干净目录里做。
 
 两个必须记住的坑：
 1. ``--specpath`` 会让 ``--add-data`` / ``--icon`` 的相对路径按 spec 目录解析 → 这里一律传绝对路径。
@@ -18,6 +26,7 @@ exe 名会被拆成乱码当命令执行（我们已经踩过两次，报错信�
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -26,10 +35,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent          # IteratorPet/
 SRC = ROOT / "src"
 EXE_NAME = "启动"
-DIST = ROOT / "dist" / EXE_NAME
+DEFAULT_OUT = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "IteratorPet" / "dist"
 
-# 注意：numpy 看似用不到，但 UnityPy 的贴图解码路径会碰它；排掉之后 exe 会在切素材时
-# 以 0xC0000409 直接死掉（连 traceback 都没有）。所以这里只排真没用的那几个。
 EXCLUDES = (
     "scipy", "pandas", "matplotlib", "lxml", "cryptography",
     "PyQt5", "PyQt6", "PySide2", "tkinter", "IPython", "jedi",
@@ -48,13 +55,15 @@ QT_IMAGE_PLUGINS = ("qpdf.dll", "qsvg.dll", "qtga.dll", "qtiff.dll", "qwbmp.dll"
                     "qwebp.dll", "qicns.dll")
 
 
-def build() -> None:
+def build(out_dir: Path) -> None:
     args = [
         sys.executable, "-m", "PyInstaller", str(ROOT / "packaging" / "run_pet.py"),
         "--name", EXE_NAME,
         "--noconfirm", "--noconsole",
         "--paths", str(SRC),
         "--add-data", f"{SRC / 'iterator_pet' / 'assets' / 'tray.png'};iterator_pet/assets",
+        # Win32 托盘用 LoadImageW 从 .ico 取 HICON（tray.png 只给窗口图标用）
+        "--add-data", f"{SRC / 'iterator_pet' / 'assets' / 'icon.ico'};iterator_pet/assets",
         # UnityPy 的 export/__init__ 会连带 import AudioClipConverter -> fmod_toolkit，
         # 而 fmod_toolkit 用 ctypes 去加载包内的 libfmod/.../fmod.dll；只收 .pyd 不收数据，
         # 冻结后就会 FileNotFoundError，切素材这一步静默退化（实机表现为"没有游戏素材"）。
@@ -67,19 +76,19 @@ def build() -> None:
         # PyInstaller 默认只收 py 文件，缺 json 会在切素材时抛 FileNotFoundError。
         "--collect-all", "archspec",
         "--icon", str(ROOT / "packaging" / "icon.ico"),
-        "--distpath", str(ROOT / "dist"),
+        "--distpath", str(out_dir),
         "--workpath", str(ROOT / "build" / "pyinstaller"),
         "--specpath", str(ROOT / "build"),
     ]
     for name in EXCLUDES:
         args += ["--exclude-module", name]
-    print("[build] PyInstaller ...", flush=True)
+    print(f"[build] PyInstaller -> {out_dir}", flush=True)
     subprocess.run(args, check=True)
 
 
-def prune() -> None:
+def prune(out_dir: Path) -> None:
     """删掉用不到的 Qt 运行时 —— 先保证能跑，再删。"""
-    qt = DIST / "_internal" / "PySide6"
+    qt = out_dir / EXE_NAME / "_internal" / "PySide6"
     removed = 0
     for name in QT_FILES:
         target = qt / name
@@ -111,18 +120,21 @@ def size_mb(path: Path) -> float:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-prune", action="store_true")
+    parser.add_argument("--out", default=None, help="产物目录（默认 %LOCALAPPDATA%\\IteratorPet\\dist）")
     args = parser.parse_args()
 
-    build()
+    out_dir = Path(args.out) if args.out else DEFAULT_OUT
+    build(out_dir)
     if not args.no_prune:
-        prune()
+        prune(out_dir)
 
-    exe = DIST / f"{EXE_NAME}.exe"
+    dist = out_dir / EXE_NAME
+    exe = dist / f"{EXE_NAME}.exe"
     if not exe.is_file():
         print("[build] 失败：没生成 exe", file=sys.stderr)
         return 1
     print(f"[build] {exe}")
-    print(f"[build] 体积 {size_mb(DIST):.1f} MB（exe {exe.stat().st_size / 1048576:.1f} MB）")
+    print(f"[build] 体积 {size_mb(dist):.1f} MB（exe {exe.stat().st_size / 1048576:.1f} MB）")
     return 0
 
 

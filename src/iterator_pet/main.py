@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication
 from .config import Config, load, save
 from .platform.hotkey import GlobalHotkey
 from .platform.pet_window import create_window
-from .platform.tray import PetTray
+from .platform.tray import make_icon
 from .rendering.renderer import draw_scene
 from .rendering.spritepack import SpritePack, default_sprite_dir
 from .simulation.state import SimulationState
@@ -32,6 +32,14 @@ def _log(message: str) -> None:
             handle.write(f"[pet] {message}\n")
     except OSError:
         pass
+
+
+def _dbg(message: str) -> None:
+    """``ITERATORPET_DEBUG=1`` 时把检查点打到 stdout（打包版也能用 `> log.txt 2>&1` 抓）。"""
+    import os
+
+    if os.environ.get("ITERATORPET_DEBUG"):
+        print(f"[dbg] {message}", flush=True)
 
 
 def render_preview(
@@ -108,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("Iterator Pet")
+    app.setWindowIcon(make_icon())
     app.setQuitOnLastWindowClosed(False)
 
     cfg = load()
@@ -140,30 +149,26 @@ def main(argv: list[str] | None = None) -> int:
         panel.show()
 
     tray = None
+    _dbg("进入托盘段")
     if not args.no_tray:
-        from PySide6.QtWidgets import QSystemTrayIcon
+        # 托盘图标走 Win32 Shell_NotifyIcon（QSystemTrayIcon 打包后压根注册不上，
+        # 连最小 exe 都复现，见 platform/win_tray.py 顶部说明）。
+        from .platform.tray import tray_menu
+        from .platform.win_tray import WinTray
 
-        if QSystemTrayIcon.isSystemTrayAvailable():
-            tray = PetTray(window, cfg, on_config_changed=lambda: None)
-            tray.attach_dev_panel(lambda: _toggle_panel(window))
-            tray.show()
+        _dbg("托盘模块导入完成")
+        tray = WinTray(
+            "五块卵石",
+            lambda: tray_menu(window, lambda: _toggle_panel(window)),
+            fallback_hwnd=int(window.winId()),
+        )
+        _dbg(f"WinTray 构造完成 hwnd={tray._hwnd} icon={tray._icon}")
+        shown = tray.show()
+        _dbg(f"Shell_NotifyIcon 返回 {shown}")
+        if shown:
             window.closed.connect(tray.hide)
-            # Windows 11 默认把新应用的托盘图标折进溢出区（^），玩家会以为程序没法退。
-            # 第一次运行时说明一次，之后不再打扰。
-            if not cfg.hint_shown:
-                tray.showMessage(
-                    "五块卵石已经在你的桌面上",
-                    "退出：右键托盘图标（可能折在 ^ 里）→ 退出；也可以直接按 Ctrl+Alt+Q；"
-                    "右键人偶本身也有菜单（开了鼠标穿透时不可用）。",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    8000,
-                )
-                cfg.hint_shown = True
-                save(cfg)
-        else:
-            # 托盘不存在（远程会话 / 精简系统）：右键人偶 + Ctrl+Alt+Q 仍然可用，
-            # 但要留一条痕迹，免得下次排查"为什么没有托盘"。
-            _log("系统托盘不可用，只保留右键菜单与 Ctrl+Alt+Q 两个退出口")
+        _log(f"托盘: Shell_NotifyIcon 注册 {'成功' if shown else '失败'}")
+        _dbg("已写日志")
 
     # 不依赖任何可见 UI 的退出口（理由见 platform/hotkey.py）。
     hotkey = GlobalHotkey(window.close)

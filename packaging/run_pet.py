@@ -4,9 +4,8 @@
 以无开发者面板的形式启动。这里只负责把异常留住 —— noconsole 打包没有 stderr，
 不留痕的话只能看到"双击没反应"。
 
-两件事必须做对（都踩过）：
-1. 日志写到 **当前 `%LOCALAPPDATA%`**（测试会用临时目录覆盖它），不能硬编码 home；
-2. 异常摘要要**写进弹框**，这样哪怕只能截图也能读到是什么错。
+**不弹任何窗**（用户明确要求）：崩溃只写日志 + stderr。
+日志写到**当前** `%LOCALAPPDATA%`（测试会用临时目录覆盖它），不硬编码 home。
 """
 
 from __future__ import annotations
@@ -35,12 +34,6 @@ def _log(text: str) -> Path | None:
         return None
 
 
-def _summary(text: str, limit: int = 700) -> str:
-    lines = text.strip().splitlines()
-    keep = lines[-8:] if len(lines) > 8 else lines
-    return "\n".join(keep)[-limit:]
-
-
 if __name__ == "__main__":
     try:
         from iterator_pet.launcher import main
@@ -52,15 +45,9 @@ if __name__ == "__main__":
         detail = traceback.format_exc()
         where = _log("启动失败:\n" + detail)
         try:
-            from PySide6.QtWidgets import QApplication, QMessageBox
-
-            app = QApplication.instance() or QApplication(sys.argv[:1])
-            box = QMessageBox()
-            box.setWindowTitle("启动失败")
-            box.setIcon(QMessageBox.Icon.Critical)
-            box.setText("五块卵石没能启动。")
-            box.setInformativeText(f"日志：{where}\n\n{_summary(detail)}")
-            box.exec()
+            print(detail, file=sys.stderr)
         except Exception:
             pass
+        if where is not None:
+            raise SystemExit(f"启动失败，日志：{where}")
         raise
