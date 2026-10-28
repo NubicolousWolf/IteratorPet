@@ -18,7 +18,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUT = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "IteratorPet" / "dist"
+DEFAULT_OUT = ROOT / "dist"
 FOLDER = "五块卵石"
 EXE_NAME = "启动"
 

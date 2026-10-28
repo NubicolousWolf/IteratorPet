@@ -35,7 +35,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent          # IteratorPet/
 SRC = ROOT / "src"
 EXE_NAME = "启动"
-DEFAULT_OUT = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "IteratorPet" / "dist"
+# 产物放仓库根的 dist/（2026-10-28：工作区的 Low 完整性标签已经用
+# `icacls /setintegritylevel Medium` 修掉了，见 AGENTS §8.2）。
+DEFAULT_OUT = ROOT / "dist"
 
 EXCLUDES = (
     "scipy", "pandas", "matplotlib", "lxml", "cryptography",

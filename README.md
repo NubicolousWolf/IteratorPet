@@ -83,15 +83,16 @@ python tools/cord_diag.py                # 缆线长度/拉伸数字
 ### 打包
 
 ```bash
-python packaging/build.py      # PyInstaller onedir + 裁剪 -> %LOCALAPPDATA%\IteratorPet\dist\启动\启动.exe（约 145 MB）
-python packaging/package.py    # 打成同目录下 五块卵石-v0.1.0-win64.zip（约 56 MB）
+python packaging/build.py      # PyInstaller onedir + 裁剪 -> dist/启动/启动.exe（约 145 MB）
+python packaging/package.py    # 打成 dist/五块卵石-v0.1.0-win64.zip（约 56 MB）
 ```
 
-产物**故意不放在仓库里**：`F:\RainworldIteratorPet` 带继承性的 **Low 完整性标签**，
-在里面编译出的 exe 会被系统降级到 Low IL，而任务栏（Medium）**拒绝** Low 进程注册托盘图标
-（`Shell_NotifyIcon` → `ERROR_ACCESS_DENIED`）。表现就是"双击后托盘里没有图标"。
-`icacls <exe>` 里能看到 `Mandatory Label\Low Mandatory Level` 就说明踩了这条；
-玩家把 zip 解到桌面/下载目录不会有这个问题。
+产物在仓库根的 `dist/`（已被 `.gitignore` 忽略）。
+
+> 这台机器曾经踩过一条：目录带 **Low 完整性标签**时，里面编出来的 exe 会被降级到 Low IL，
+> 任务栏（Medium）**拒绝** Low 进程注册托盘图标（`Shell_NotifyIcon` → `ERROR_ACCESS_DENIED`），
+> 表现就是"双击后托盘里没有图标"。2026-10-28 已把工作区的标签改成 Medium 并验证通过。
+> 换机器/换目录后若又丢图标，先跑 `icacls <exe> | Select-String Mandatory`。
 
 `build.cmd` 只是转发给 `build.py`（.cmd 里写中文会被 cmd 按控制台代码页拆开执行，踩过两次）。
 裁剪清单在 `build.py` 的 `QT_FILES/QT_DIRS/QT_PLUGIN_DIRS`：只留 Core/Gui/Widgets、`qwindows` 平台插件、
