@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -120,7 +121,18 @@ def steam_libraries() -> list[Path]:
 
 
 def detect_install() -> Path | None:
-    """自动探测：Steam 各库里找 ``steamapps/common/Rain World``。"""
+    """自动探测：Steam 各库里找 ``steamapps/common/Rain World``。
+
+    两个环境变量（都写在 README 里）：
+    * ``RAINWORLD_DIR`` —— 直接指定游戏根目录，跳过探测；指错了就当没找到（不偷偷回退，
+      免得用户以为自己设的值生效了）。
+    * ``ITERATORPET_NO_DETECT=1`` —— 强制“没有游戏”，用来测未初始化 / 无游戏本体的流程。
+    """
+    override = os.environ.get("RAINWORLD_DIR")
+    if override:
+        return Path(override) if looks_like_install(override) else None
+    if os.environ.get("ITERATORPET_NO_DETECT"):
+        return None
     for library in steam_libraries():
         game = library / "steamapps" / "common" / GAME_DIR_NAME
         if looks_like_install(game):

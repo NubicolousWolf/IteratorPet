@@ -182,6 +182,30 @@ class PetWindow(PetCanvas):
         else:
             super().keyPressEvent(event)
 
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        """右键菜单：托盘图标被 Windows 折进溢出区时，这是最直接的退出入口。"""
+        from PySide6.QtGui import QAction
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        action_pause = QAction("继续" if self._paused else "暂停", menu)
+        action_pause.triggered.connect(self.toggle_pause)
+        menu.addAction(action_pause)
+
+        action_click = QAction("鼠标穿透", menu)
+        action_click.setCheckable(True)
+        action_click.setChecked(bool(self.click_through))
+        action_click.triggered.connect(self.toggle_click_through)
+        menu.addAction(action_click)
+
+        menu.addSeparator()
+        action_quit = QAction("退出", menu)
+        action_quit.triggered.connect(self.close)
+        menu.addAction(action_quit)
+
+        menu.exec(event.globalPos())
+        event.accept()
+
 
 def create_window(config: Config | None = None, sprites=None) -> PetWindow:
     app = QApplication.instance() or QApplication([])

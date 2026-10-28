@@ -18,6 +18,8 @@ class Config:
     scale: float = 2.2
     # Rain World 安装目录（启动器第一次运行时自动探测并写入；空 = 还没初始化）
     install: str = ""
+    # 是否已经提示过"怎么退出我"（Windows 11 把托盘图标折进溢出区，用户找不到）
+    hint_shown: bool = False
 
 
 def config_dir() -> Path:
@@ -42,8 +44,14 @@ def load() -> Config:
 
 
 def save(cfg: Config) -> None:
+    import os
+    import traceback
+
     try:
         config_dir().mkdir(parents=True, exist_ok=True)
         config_path().write_text(json.dumps(asdict(cfg), indent=2), encoding="utf-8")
     except OSError:
-        pass
+        if os.environ.get("ITERATORPET_DEBUG"):
+            print(f"[debug] save() failed for {config_path()}:\n{traceback.format_exc()}")
+        else:
+            pass

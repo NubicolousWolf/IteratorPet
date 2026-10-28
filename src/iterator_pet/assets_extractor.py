@@ -289,6 +289,19 @@ def ensure_sprites(cache_dir: Path | None = None, install: Path | None = None) -
     return extract(Path(install) if install else DEFAULT_INSTALL, cache_dir=cache)
 
 
+def prepare(install: Path | None = None) -> ExtractReport | None:
+    """启动时该调的那一个入口：缓存齐了立刻返回，缺了才切素材。
+
+    **只能在启动器/这里提取**：绘制路径绝不能触发 UnityPy 解包——早先
+    ``rendering/sprites._raw`` 就在 paintEvent 里调了 ``ensure_sprites``，
+    全新环境第一次绘制会解整个 resources.assets，失败时直接“启动失败”。
+    """
+    try:
+        return ensure_sprites(install=Path(install) if install else None)
+    except Exception:  # 切素材失败不该拦住桌宠：用占位图元继续
+        return None
+
+
 def sprite_path(name: str, cache_dir: Path | None = None) -> Path:
     cache = Path(cache_dir) if cache_dir else cache_root()
     return cache / "sprites" / f"{name}.png"
