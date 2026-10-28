@@ -98,7 +98,7 @@ def draw_rail(painter: QPainter, state: RenderState) -> None:
             angle = atan2(dy, dx) * 180.0 / pi
             painter.save()
             painter.translate(QPointF(*p0))
-            painter.rotate(angle)
+            painter.rotate(-angle)
             painter.drawPixmap(QRectF(0.0, -1.0, length + 10.0, 2.0), bar, QRectF(bar.rect()))
             painter.restore()
         bolt = tinted("deerEyeB", metal)
@@ -117,33 +117,164 @@ def draw_rail(painter: QPainter, state: RenderState) -> None:
 # halo
 # --------------------------------------------------------------------------
 def draw_halo(painter: QPainter, state: RenderState) -> None:
+    """og.cs:672-750 —— 2 个环 + 100 个 bit + （P3）20 根电光。
+
+    颜色：源码里三样都是**纯黑**（`og.cs:678/683/689`），实机发橙是那盏
+    `ForegroundLights` 的灯盖在上面。桌面版没有光照系统，2026-10-28 用户拍板
+    **直接上色**（PLAN-halo §4 选项 C）：环/bit 用那盏灯的颜色画，不叠柔光。
+    """
     cx, cy = state.halo_center
-    painter.setBrush(Qt.BrushStyle.NoBrush)
+    expand = state.halo_expand
+    push = state.halo_push
+    white = state.halo_white
 
-    for index, radius in enumerate(state.halo_radii):
-        radius *= 0.72
-        alpha = 150 - index * 35
-        painter.setPen(QPen(qc(C.HALO_COLOUR, alpha), 1.2))
-        painter.drawEllipse(QPointF(cx, cy), radius, radius)
+    painter.save()
+    painter.setPen(Qt.PenStyle.NoPen)
 
-    for ring, base, tip, brightness in state.halo_bits:
-        alpha = int(70 + 165 * brightness)
-        width = 2.2 if ring == 0 else (1.8 if ring == 1 else 1.4)
-        cx, cy = state.halo_center
-        base = (cx + (base[0] - cx) * 0.72, cy + (base[1] - cy) * 0.72)
-        tip = (cx + (tip[0] - cx) * 0.72, cy + (tip[1] - cy) * 0.72)
-        painter.setPen(QPen(qc(C.HALO_GLOW if brightness > 0.5 else C.HALO_COLOUR, alpha), width))
-        painter.drawLine(QPointF(*base), QPointF(*tip))
+    # 内暗外亮的径向渐变：源码里这层亮度差来自那盏 400 px 的灯，桌面端直接画出来。
+    # 环用一个"到环 0 半径就收尾"的渐变（这样白闪填盘时外缘最亮），
+    # bit 用延伸到最外圈 bit 半径的那个。
+    base = QColor(*C.HALO_COLOUR)
 
-    for a, b, control, light in state.halo_connections:
-        alpha = int(160 * light)
-        if alpha <= 4:
+    def _gradient(outer: float, dim: float) -> QBrush:
+        grad = QRadialGradient(QPointF(cx, cy), max(1.0, outer))
+        for stop, factor in ((0.0, C.HALO_GRADIENT_INNER),
+                             (0.55, 0.5 * (C.HALO_GRADIENT_INNER + C.HALO_GRADIENT_OUTER)),
+                             (1.0, C.HALO_GRADIENT_OUTER)):
+            grad.setColorAt(stop, QColor(
+                min(255, int(base.red() * factor)),
+                min(255, int(base.green() * factor)),
+                min(255, int(base.blue() * factor)),
+                int(255 * C.HALO_OPACITY * dim),
+            ))
+        return QBrush(grad)
+
+    ring_zero = (C.HALO_RADIUS_BASE + push) * expand * 10.0
+    ring_brush = _gradient(ring_zero, 1.0)
+    bit_brush = _gradient((C.HALO_RADIUS_BASE + 3.0 + push) * expand * 10.0, C.HALO_BIT_DIM)
+
+    # 0. 电光（20 根，画在**最底层**：被环和 bit 盖住，看起来是从光环内部伸出来的）：源码 `Bezier(stuckAt, handle, center+dir·Radius(2), center+dir·400)`。
+    #    桌面端按用户 2026-10-28 的三条意见调整（源码数字见 docs/PLAN-halo.md §2.8）：
+    #      · 宽度 = 光环环带宽度（2 px 全宽）——原来 3.2 半宽太粗
+    #      · 长度拉到**腔室对角线**，任何时刻都延伸出屏幕（原来 140–230 px 会在中途截断）
+    #      · 端点落在最外圈 bit 的外缘，真正"接上"光环
+    # 端点接**内圈环**（ring 0）：电光画在最底层，被环和 bit 盖住，视觉上就是"扎进光环里"。
+    spark_radius = (C.HALO_RADIUS_BASE + push) * expand * 10.0 + 1.0
+    spark_base = QColor(*C.HALO_COLOUR)
+    spark_colour = QColor(
+        min(255, int(spark_base.red() * 1.05)),
+        min(255, int(spark_base.green() * 1.05)),
+        min(255, int(spark_base.blue() * 1.05)),
+        int(255 * C.HALO_OPACITY),
+    )
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(spark_colour))
+    clip = state.bounds
+    far_reach = 0.0
+    if clip is not None:
+        far_reach = hypot(clip[2], clip[3])
+    for (stuck_at, handle, light) in state.halo_sparks:
+        if light <= C.HALO_SPARK_VISIBLE:
             continue
+        dx, dy = stuck_at[0] - cx, stuck_at[1] - cy
+        reach = hypot(dx, dy) or 1.0
+        dirx, diry = dx / reach, dy / reach
+        anchor_reach = far_reach if far_reach > 0.0 else max(reach, 300.0)
+        ax = cx + dirx * anchor_reach
+        ay = cy + diry * anchor_reach
+        # 弯曲量：用 handle 的横向分量，放大成可见的弧（±200 px）；锚点那头只带一点，
+        # 大部分弯放在靠近光环的 cB 上，这样屏幕上看到的是明显的一条弧而不是直线。
+        # 弯曲：**沿路径加一个正弦鼓包**（两端为 0、中段最大），端点仍然精确落在光环上。
+        # 只偏控制点时，锚点在 1290 px 外 → 屏幕上那一段几乎还是直线；正弦鼓包能把弯
+        # 直接压到看得见的范围里。方向由 handle 决定，幅度 120–360 px。
+        lateral = (handle[0] - ax) * -diry + (handle[1] - ay) * dirx
+        bow_sign = 1.0 if lateral >= 0.0 else -1.0
+        handle_len = hypot(handle[0] - ax, handle[1] - ay)
+        bow = bow_sign * (180.0 + 240.0 * min(1.0, handle_len / C.HALO_HANDLE_MAX))
+        # 第二谐波 + 相位（相位由 handle 决定）：一根弧里有 1.5 个波峰，才像"扭"的雷电，
+        # 而不是一条平滑的圆弧。
+        phase = (handle[0] * 0.017 + handle[1] * 0.031) % (2.0 * pi)
+        control_a = (ax, ay)
+        end_point = (cx + dirx * spark_radius, cy + diry * spark_radius)
+        control_b = end_point
+        half_width = C.HALO_SPARK_HALF_WIDTH * light
+
+        points = []
+        for i in range(C.HALO_SPARK_POINTS + 1):
+            f = i / C.HALO_SPARK_POINTS
+            # 参数序：|_bezier| 是教科书式 (起点, c1, c2, 终点, t)
+            base = _bezier((ax, ay), control_a, control_b, end_point, f)
+            # sin(πf) 保证两端为 0（端点仍精确落在刻度环上），再乘一个带相位的
+            # 余弦做 S 形扭动。
+            bulge = bow * sin(pi * f) * cos(2.2 * pi * f + phase)
+            points.append((base[0] + (-diry) * bulge, base[1] + dirx * bulge))
+        left_side: list[tuple[float, float]] = []
+        right_side: list[tuple[float, float]] = []
+        for index, point in enumerate(points):
+            nxt = points[min(index + 1, len(points) - 1)]
+            prv = points[max(index - 1, 0)]
+            tx, ty = nxt[0] - prv[0], nxt[1] - prv[1]
+            norm = hypot(tx, ty) or 1.0
+            nx, ny = ty / norm, -tx / norm      # y 朝下时的 PerpendicularVector 孪生式
+            left_side.append((point[0] + nx * half_width, point[1] + ny * half_width))
+            right_side.append((point[0] - nx * half_width, point[1] - ny * half_width))
         path = QPainterPath()
-        path.moveTo(QPointF(*a))
-        path.quadTo(QPointF(*control), QPointF(*b))
-        painter.setPen(QPen(qc(C.HALO_GLOW, alpha), 0.9))
+        path.setFillRule(Qt.FillRule.WindingFill)
+        path.moveTo(QPointF(*left_side[0]))
+        for point in left_side[1:]:
+            path.lineTo(QPointF(*point))
+        for point in reversed(right_side):
+            path.lineTo(QPointF(*point))
+        path.closeSubpath()
         painter.drawPath(path)
+
+    # 1. 环（2 个）：填充的**圆环带**，外半径 = Radius(k)，内半径 = R·(1−alpha)。
+    #    alpha = 3/R（环 1 固定、环 0 被 white 拉向 1）→ 普通时厚 3 px，
+    #    white 时环 0 的内半径收缩到 0，整盘填满——这才是源码的"闪白"。
+    for ring in range(C.HALO_RING_SPRITES):
+        radius = (C.HALO_RADIUS_BASE + ring + push) * expand * 10.0
+        if radius <= 0.5:
+            continue
+        thin = C.HALO_RING_THICKNESS / radius
+        alpha = thin + (1.0 - thin) * white if ring == 0 else min(1.0, thin)
+        alpha = max(0.0, min(1.0, alpha))
+        inner = radius * (1.0 - alpha)
+        path = QPainterPath()
+        path.setFillRule(Qt.FillRule.OddEvenFill)
+        path.addEllipse(QPointF(cx, cy), radius, radius)
+        if inner > 0.02:
+            path.addEllipse(QPointF(cx, cy), inner, inner)
+        painter.setBrush(ring_brush)
+        painter.drawPath(path)
+
+    # 2. bit（100 个）：固定 4 px 宽、8·Fill 长的矩形，**中心**落在 Radius(ring+0.5)。
+    #    角度 = i/len·360 + Rotation(ring)；长轴指向径向。
+    offset = 0
+    for ring, count in enumerate(C.HALO_RINGS):
+        if ring >= len(state.halo_rot):
+            break
+        rotation = state.halo_rot[ring]
+        radius = (C.HALO_RADIUS_BASE + ring + 0.5 + push) * expand * 10.0
+        painter.setBrush(bit_brush)
+        for index in range(count):
+            fill = state.halo_fill[offset + index] if offset + index < len(state.halo_fill) else 0.0
+            offset += 1
+            length = C.HALO_BIT_LENGTH * fill
+            if length <= 0.05:
+                continue
+            angle = index / count * 360.0 + rotation
+            rad = radians(angle)
+            x = cx + sin(rad) * radius
+            y = cy + cos(rad) * radius
+            painter.save()
+            painter.translate(x, y)
+            painter.rotate(-angle)
+            painter.drawRect(
+                QRectF(-C.HALO_BIT_WIDTH * 0.5, -length * 0.5, C.HALO_BIT_WIDTH, length)
+            )
+            painter.restore()
+
+    painter.restore()
 
 
 # --------------------------------------------------------------------------
@@ -843,8 +974,10 @@ def draw_scene(
     painter.save()
     painter.scale(scale, scale)
 
-    draw_rail(painter, state)
+    # 层序：光环在 BackgroundShortcuts(=1)，轨道/机械臂在 Midground(3)/Shortcuts(8)，
+    # 所以光环必须**先**画、被轨道盖住（og.cs:2018 的 ArmBase 层）。
     draw_halo(painter, state)
+    draw_rail(painter, state)
     draw_arm(painter, state)
     draw_cord(painter, state)
     # Layer order matters: the robe must cover the lower body, the head sits on top.

@@ -103,6 +103,18 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
     menu.addAction(action_dev)
 
     menu.addSeparator()
+    spark_menu = menu.addMenu("电光频率（开发）")
+    current_rate = getattr(window, "spark_rate", "eco")
+    for key, label in (("off", "无"), ("eco", "节能"), ("computing", "computing（1.5×）")):
+        action_rate = QAction(label, spark_menu)
+        action_rate.setCheckable(True)
+        action_rate.setChecked(current_rate == key)
+        action_rate.triggered.connect(
+            lambda _checked=False, name=key: window.set_spark_rate(name)
+        )
+        spark_menu.addAction(action_rate)
+
+    menu.addSeparator()
     action_quit = QAction("退出", menu)
     action_quit.triggered.connect(window.close)
     menu.addAction(action_quit)

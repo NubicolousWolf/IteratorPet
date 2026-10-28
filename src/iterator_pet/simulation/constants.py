@@ -353,12 +353,50 @@ GOWN_TOLERANCE = 9.0       # Mathf.Lerp(0f, 9f, t)
 GOWN_NEIGHBOUR_SPRING = 0.05
 
 # --------------------------------------------------------------- halo -----
+# og.cs:537-565 / 672-691 / 2007-2049 —— 122 个 sprite：2 环 + 20 电光 + 100 bit。
 HALO_RINGS = (10, 30, 60)  # MemoryBit counts per ring
-HALO_CONNECTIONS = 20
+HALO_RING_SPRITES = 2      # 只有 2 个环 sprite；Radius(2) 只给电光落点用
+HALO_CONNECTIONS = 20      # TriangleMesh.MakeLongMesh(20)，每根 20 段
 HALO_HEAD_OFFSET = 20.0    # Center = head + DirVec(firstChunk, head) * 20f
 HALO_RADIUS_BASE = 3.0     # (3f + ring + push - 0.5f * avgVoice) * expand * 10f
 HALO_EXPAND_BASE = 1.0
 HALO_PUSH_BASE = 0.0
+HALO_WHITE_BASE = 0.0
+HALO_VOICE = 0.0           # averageVoice：桌面版没有分贝源，固定 0（保留入参）
+
+# og.cs:621-647  LerpAndTick(值, 目标, 比例, 每 tick 最小步长)
+HALO_EXPAND_LERP, HALO_EXPAND_TICK = 0.05, 0.0125
+HALO_PUSH_LERP, HALO_PUSH_TICK = 0.02, 0.025
+HALO_WHITE_LERP, HALO_WHITE_TICK = 0.07, 1.0 / 44.0
+HALO_TARGET_CHANCE = 1.0 / 160.0     # 每 tick 各抽一次目标
+HALO_WHITE_FLASH_CHANCE = 0.125      # getToWhite 抽中 1 的概率（1/8）
+HALO_EXPAND_MIN, HALO_EXPAND_MAX = 0.8, 2.0
+HALO_RING_ROTATE_CHANCE = 1.0 / 30.0
+HALO_RING_ROTATE_MIN, HALO_RING_ROTATE_MAX = 15.0, 150.0
+
+# og.cs:737-750  bit：固定 4 px 宽、8·Fill 长的矩形，**中心**落在 Radius(ring+0.5)
+HALO_BIT_WIDTH = 4.0
+HALO_BIT_LENGTH = 8.0
+HALO_BIT_FILL_LERP = 0.03
+HALO_BIT_REROLL_CHANCE = 1.0 / 60.0
+HALO_RING_CHARGE_CHANCE = 1.0 / 60.0   # 每 tick 1/60 挑一圈整体 SetToMax
+
+# og.cs:419-440 / 567-582 / 715-736  电光
+HALO_SPARK_POINTS = 48        # 采样点数（源码 mesh 是 20 段；这里过采样，弯曲才平滑）
+HALO_SPARK_END_RING = 2          # 端点 B = center + dir * Radius(2)
+HALO_SPARK_CB_REACH = 400.0      # 控制点 cB = center + dir * 400
+HALO_SPARK_HALF_WIDTH = 1.0      # 半宽（全宽 2 px，和光环环带同宽；源码是 2*lightUp）
+HALO_SPARK_FIRE_DIVISOR = 40.0
+HALO_SPARK_DECAY = 0.9
+HALO_SPARK_VISIBLE = 0.05        # 绘制门：last 或 cur 任一 > 0.05
+HALO_SPARK_REROLL_CHANCE = 1.0 / 60.0
+# 电光频率三档（用户 2026-10-28 要求，开发者菜单里切），数字是**相对源码的频率倍数**：
+#   off = 0（不闪）、eco = 0.7（默认；源码 1.0 用户觉得"烦人"）、computing = 1.5
+HALO_SPARK_RATES = {"off": 0.0, "eco": 0.7, "computing": 1.5}
+HALO_SPARK_DEFAULT_RATE = "eco"
+HALO_ANCHOR_MIN, HALO_ANCHOR_MAX = 300.0, 500.0
+HALO_HANDLE_MIN, HALO_HANDLE_MAX = 400.0, 700.0
+HALO_SEAM_BACK = 0.3             # 段间补缝 |prev->p| * 0.3
 
 # ------------------------------------------------------------- colours ----
 SKIN_COLOUR = (255, 102, 203)   # Color(1f, 0.4f, 0.796f)
@@ -378,9 +416,25 @@ EYE_WIDTH_MAX = 2.0
 METAL_BLEND = (31, 7, 0)        # palette.texture.GetPixel(5, 5)
 BLACK = (0, 0, 0)
 
-# Halo in SS_AI renders warm amber because of the room's orange lights.
-HALO_COLOUR = (234, 123, 42)
-HALO_GLOW = (255, 176, 92)
+# 光环本体在源码里是**黑色剪影**（og.cs:678/683/689 显式设 `Color.black`），实机里的暖色
+# 来自 `ForegroundLights` 那盏灯（HSL2RGB(0.1,1,0.5)、400 px）盖在它上面。
+# 桌面版没有光照系统。2026-10-28 试过"黑环 + 柔光叠色"（PLAN-halo §4 选项 B），用户实机否掉：
+# 柔光像一块脏污、环仍然是黑的。**定案改为直接上色**（选项 C）：环/bit 直接用那盏灯的橙色。
+# 颜色取自实机参考图（游戏截图/five-pebbles-预览图.jpg，光环环形像素中位 (163,82,65)、
+# 亮端 (255,119,3)；背景 (66,36,28)）。HSL2RGB(0.1,1,0.5) 的纯 (255,153,0) 用户嫌"过黄"，
+# 这里用早期版本被认可过的暖砖橙，并整体给一点透明度（源码是不透明的，桌面端压不住壁纸）。
+HALO_COLOUR = (215, 122, 88)
+HALO_SPARK_COLOUR = (198, 96, 30)  # 设计增补：电光比环/bit 暗一档，避免糊成一片
+HALO_OPACITY = 0.90                # 设计增补：留一点壁纸透出来（源码不透明）
+
+# 下面四个是设计增补：源码是 3 px 环带 / 4 px 宽 bit，桌面端按用户 2026-10-28 的意见收细。
+HALO_RING_THICKNESS = 2.0
+HALO_BIT_WIDTH = 2.6
+HALO_BIT_LENGTH = 7.0
+# 光环的"内暗外亮"：源码里这是那盏灯打出来的，桌面端直接画成径向渐变。
+# (渐变最内圈亮度系数, 最外圈亮度系数)；1.0 = HALO_COLOUR 原亮度。
+HALO_GRADIENT_INNER, HALO_GRADIENT_OUTER = 0.55, 1.15
+HALO_BIT_DIM = 0.85                # bit 比环暗一点（参考图里环边更亮）
 
 
 def _lerp(a: float, b: float, t: float) -> float:

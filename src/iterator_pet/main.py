@@ -136,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
 
     pack = SpritePack.load(args.sprites or default_sprite_dir())
     window = create_window(cfg, sprites=pack)
+    # 电光频率档位：off / eco / computing（托盘或右键菜单里能改，写回 config）
+    window.simulation.halo.set_spark_rate(getattr(cfg, "spark_rate", "eco"))
     window.show()
     window.raise_()
 

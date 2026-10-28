@@ -87,13 +87,21 @@ def test_cord_pins_socket_and_arm_hook():
     for _ in range(200):
         cord.step(elbow_a, elbow_b, (430.0, 210.0), (430.0, 190.0), (0.0, 1.0))
     assert cord.nodes[0] == cord.socket
-    # the three clamp nodes sit at 0.4 / 0.47 / 0.54 along the elbow chord,
-    # offset 8 px sideways -- the middle one is the weighted one
-    hook = cord.nodes[int(len(cord.nodes) * 0.75)]
-    t = 0.47
-    expected = (elbow_a[0] + (elbow_b[0] - elbow_a[0]) * t,
-                elbow_a[1] + (elbow_b[1] - elbow_a[1]) * t)
-    assert hypot(hook[0] - expected[0], hook[1] - expected[1]) < 12.0
+    # og.cs:933  coord[Length - 20 + i] —— 钩点索引**跟着节点数走**。
+    # 这里以前写的是 int(len * 0.75)：只有 80 节点时 0.75*80 才等于 80-20，
+    # 腔室一大（83..240 节点）这条断言就在量错节点。改成 count-20，
+    # 顺带把容差从 12 px 收到 1 px —— 中间那个节点是被 0.47 权重*精确*钉住的。
+    hook_index = len(cord.nodes) - 20
+    hook = cord.nodes[hook_index]
+    axis_x, axis_y = elbow_b[0] - elbow_a[0], elbow_b[1] - elbow_a[1]
+    axis_len = hypot(axis_x, axis_y)
+    nx, ny = axis_y / axis_len, -axis_x / axis_len      # y 朝下的 PerpendicularVector
+    t = 0.40                                            # 中间节点：0.40 + 0.07*0
+    expected = (
+        elbow_a[0] + (elbow_b[0] - elbow_a[0]) * t + nx * 8.0,
+        elbow_a[1] + (elbow_b[1] - elbow_a[1]) * t + ny * 8.0,
+    )
+    assert hypot(hook[0] - expected[0], hook[1] - expected[1]) < 1.0
     assert cord.finite()
 
 

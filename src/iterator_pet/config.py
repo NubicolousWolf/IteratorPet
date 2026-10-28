@@ -18,6 +18,8 @@ class Config:
     scale: float = 2.2
     # Rain World 安装目录（启动器第一次运行时自动探测并写入；空 = 还没初始化）
     install: str = ""
+    # 电光频率档位：off / eco / computing（开发者菜单里切，见 constants.HALO_SPARK_RATES）
+    spark_rate: str = "eco"
 
 
 def config_dir() -> Path:

@@ -159,6 +159,16 @@ class PetWindow(PetCanvas):
     def paused(self) -> bool:
         return self._paused
 
+    def set_spark_rate(self, name: str) -> None:
+        """切换电光频率档位（off / eco / computing），并写回配置。"""
+        self.simulation.halo.set_spark_rate(name)
+        self.config.spark_rate = name
+        save(self.config)
+
+    @property
+    def spark_rate(self) -> str:
+        return getattr(self.config, "spark_rate", "eco")
+
     def toggle_click_through(self) -> None:
         self.click_through = not self.click_through
         self._apply_click_through()
@@ -197,6 +207,17 @@ class PetWindow(PetCanvas):
         action_click.setChecked(bool(self.click_through))
         action_click.triggered.connect(self.toggle_click_through)
         menu.addAction(action_click)
+
+        menu.addSeparator()
+        spark_menu = menu.addMenu("电光频率（开发）")
+        for key, label in (("off", "无"), ("eco", "节能"), ("computing", "computing（1.5×）")):
+            action_rate = QAction(label, spark_menu)
+            action_rate.setCheckable(True)
+            action_rate.setChecked(self.spark_rate == key)
+            action_rate.triggered.connect(
+                lambda _checked=False, name=key: self.set_spark_rate(name)
+            )
+            spark_menu.addAction(action_rate)
 
         menu.addSeparator()
         action_quit = QAction("退出", menu)

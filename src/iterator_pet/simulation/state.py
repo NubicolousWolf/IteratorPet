@@ -22,8 +22,13 @@ from .arm import ArmChain
 from .behavior import BehaviourSelector, Wander
 from .cord import Cord
 from .creature import Creature
-from .ornament import Gown, Halo, HaloBit
+from .ornament import Gown, Halo
 from .rail import RailPath, move_towards_angle
+
+
+def mix_scalar(a: float, b: float, alpha: float) -> float:
+    """标量插值（``RenderState.lerp`` 里混相邻两个 tick 的快照用）。"""
+    return a + (b - a) * alpha
 
 
 @dataclass
@@ -45,10 +50,17 @@ class RenderState:
     filament_colours: list[str]
     gown: list[list[tuple[float, float]]]
     gown_divs: int
+    # 光环：快照只存**原始标量**（expand/push/white/旋转/每 bit 填充度），
+    # 半径、环厚、bit 尺寸都在渲染时折算——源码也是这么做的（`Lerp(lastX, X, ts)`）。
+    # `interpolate(alpha)` 混的是相邻两个 tick 的快照，等价于源码的 last/cur。
     halo_center: tuple[float, float]
-    halo_radii: list[float]
-    halo_bits: list[tuple[int, tuple[float, float], tuple[float, float], float]]
-    halo_connections: list[tuple[tuple[float, float], tuple[float, float], tuple[float, float], float]]
+    halo_expand: float
+    halo_push: float
+    halo_white: float
+    halo_rot: list[float]
+    halo_fill: list[float]
+    # 20 根电光：(锚点 stuck_at, 控制柄 handle, 当前亮度 lightUp)
+    halo_sparks: list[tuple[tuple[float, float], tuple[float, float], float]]
     cursor: tuple[float, float] | None
     behaviour: str
     time: float
@@ -95,9 +107,15 @@ class RenderState:
             gown=gown,
             gown_divs=self.gown_divs,
             halo_center=mix(self.halo_center, other.halo_center),
-            halo_radii=list(other.halo_radii),
-            halo_bits=other.halo_bits,
-            halo_connections=other.halo_connections,
+            halo_expand=mix_scalar(self.halo_expand, other.halo_expand, alpha),
+            halo_push=mix_scalar(self.halo_push, other.halo_push, alpha),
+            halo_white=mix_scalar(self.halo_white, other.halo_white, alpha),
+            halo_rot=[mix_scalar(a, b, alpha) for a, b in zip(self.halo_rot, other.halo_rot)],
+            halo_fill=[mix_scalar(a, b, alpha) for a, b in zip(self.halo_fill, other.halo_fill)],
+            halo_sparks=[
+                (a[0], a[1], mix_scalar(a[2], b[2], alpha))
+                for a, b in zip(self.halo_sparks, other.halo_sparks)
+            ],
             cursor=other.cursor,
             behaviour=other.behaviour,
             time=other.time,
@@ -139,7 +157,8 @@ class SimulationState:
         self.creature = Creature(self.wander.current)
         self.cord = Cord(self._inset(), self.creature.chunk0)
         self.gown = Gown(self.creature.chunk0, self.creature.body_dir)
-        self.halo = Halo(seed=seed)
+        self.halo = Halo(self._inset(), seed=seed)
+        self.halo.seed_connections()
 
         self.selector = BehaviourSelector()
         self.behaviour = "roaming"
@@ -196,6 +215,7 @@ class SimulationState:
         inner = self._inset()
         self.rail = RailPath(inner)
         self.wander.bounds = inner
+        self.halo.resize(inner)
         self._refresh_thresholds()
         self.frame_pos = self.rail.project(self.creature.chunk0)
         self._cur = self._compose()
@@ -492,7 +512,6 @@ class SimulationState:
     def _compose(self) -> RenderState:
         pose = self.rail.pose(self.frame_pos)
         center = self._halo_center()
-        bits = self.halo.bit_positions(center)
         return RenderState(
             base_point=pose.point,
             base_dir=pose.inward,
@@ -512,9 +531,14 @@ class SimulationState:
             gown=[list(row) for row in self.gown.pos],
             gown_divs=self.gown.divs,
             halo_center=center,
-            halo_radii=[self.halo.radius(r) for r in range(3)],
-            halo_bits=[(bit.ring, base, tip, bit.brightness) for bit, base, tip in bits],
-            halo_connections=self.halo.connection_curves(center),
+            halo_expand=self.halo.expand,
+            halo_push=self.halo.push,
+            halo_white=self.halo.white,
+            halo_rot=[self.halo.rotation(r) for r in range(self.halo.ROWS)],
+            halo_fill=self.halo.bit_fills(),
+            halo_sparks=[
+                (c.stuck_at, c.handle, c.light_up) for c in self.halo.connections
+            ],
             cursor=self.cursor,
             behaviour=self.behaviour,
             time=self.time,
