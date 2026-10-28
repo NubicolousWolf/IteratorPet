@@ -9,7 +9,7 @@
 发布包解开后直接双击启动.exe。
 
 觉得太大 / 太小：右键托盘图标 → 尺寸：便携版（40%）· 青春版（75%）· 满血版（100%，默认）· PRO（150%）
-同一个菜单里还有「电光频率」（关 / 节能 / computing）。
+同一个菜单里还有电光频率。
 
 
 ### 首次运行 / 之后每次
@@ -25,7 +25,7 @@
 python -m pip install -r requirements.txt   # PySide6 + UnityPy
 $env:PYTHONPATH = "src"
 python -m iterator_pet.main                 # 桌宠本体
-python -m iterator_pet.launcher             # 发布版入口（先找游戏、再启动）
+python -m iterator_pet.launcher             # 发布版入口
 ```
 
 ## 功能
@@ -38,16 +38,12 @@ python -m iterator_pet.launcher             # 发布版入口（先找游戏、�
 
 ### 美术资源
 
-精灵**不会**随仓库分发。启动时程序只读地从**你自己的** Rain World 安装里提取基础图元
-（`Circle20` / `CentipedeSegment` / `pixel` 等）到 `%LOCALAPPDATA%\IteratorPet\cache\sprites\`。
-找不到游戏时会退化为等价像素图元，仍可运行。安装路径可用环境变量覆盖：
+启动时从你自己的 Rain World 安装里提取基础图元到 `%LOCALAPPDATA%\IteratorPet\cache\sprites\`。
+安装路径可用环境变量覆盖：
 
 ```powershell
 $env:RAINWORLD_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
 ```
-
-托盘缩略图 `src/iterator_pet/assets/tray.png` 是本仓库渲染管线画出来的人偶全身像
-（`tools/puppet_portrait.py` 联络表左起第一个，128 px），不是从游戏里切出来的图。
 
 ## 已知BUG
 
