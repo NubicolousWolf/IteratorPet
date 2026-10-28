@@ -384,6 +384,8 @@ class SimulationState:
             pose.point, self.creature.chunk0, self.creature.chunk1,
             self.creature.body_dir, False, bounds=self._inset(),
         )
+        # 拖拽/甩出期间机械臂要**跟手**（软约束会落后上百 px，见 snap_to 的注释）
+        self.arm.snap_to(pose.point, self.creature.chunk0)
         self.cord.step(self.arm.joints[1].pos, self.arm.elbow_pos(1),
                        self.creature.chunk0, self.creature.head, self.creature.look_dir)
         self.gown.step(self.creature.chunk0, self.creature.body_dir, self.creature.chunk1)
@@ -424,7 +426,12 @@ class SimulationState:
         # 方向正是背离底座 → 夹完就变成往回走（实测松手 10 tick 仍 -13 px）。这里自己
         # 积分十几 tick 的刚体位移，方向就是拖动方向，衰减到停为止。
         if self.fling_ticks > 0 and not self.dragging:
-            self._translate_creature(self.fling_vel)
+            base_now = self.rail.pose(self.frame_pos).point
+            wanted = (self.creature.chunk0[0] + self.fling_vel[0],
+                      self.creature.chunk0[1] + self.fling_vel[1])
+            allowed = self._reachable(base_now, wanted)     # 甩也不能甩出臂展
+            self._translate_creature((allowed[0] - self.creature.chunk0[0],
+                                      allowed[1] - self.creature.chunk0[1]))
             self.fling_vel = (self.fling_vel[0] * C.FLING_DECAY,
                               self.fling_vel[1] * C.FLING_DECAY)
             self.fling_ticks -= 1
@@ -584,6 +591,13 @@ class SimulationState:
         get_to = self._clamp_to_room(get_to)
         self.last_goal = get_to
         self.creature.step(get_to, get_to_dir, look_point)
+        # 兜底：身体真的跑到臂展之外（拖拽残留、甩出、极端行为）时拉回边界。
+        # 用 1.02 倍留一点余量，正常漫游碰不到这条分支。
+        limit = sum(C.ARM_LENGTHS) * C.ARM_REACH_RATIO * 1.02
+        if C.dist(pose.point, self.creature.chunk0) > limit:
+            fixed = self._reachable(pose.point, self.creature.chunk0)
+            self._translate_creature((fixed[0] - self.creature.chunk0[0],
+                                      fixed[1] - self.creature.chunk0[1]))
         self.arm.update(
             pose.point, self.creature.chunk0, self.creature.chunk1,
             get_to_dir, self.base_moving, bounds=self._inset(),

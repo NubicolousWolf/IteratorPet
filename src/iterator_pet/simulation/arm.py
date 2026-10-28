@@ -52,6 +52,27 @@ class ArmChain:
             self.joints.append(Joint(index, length, position, flip))
             position = (position[0], position[1] + length)
 
+    def snap_to(self, base_point: tuple[float, float], body0: tuple[float, float],
+                passes: int = 8) -> None:
+        """把整条链**硬收敛**到底座与身体之间（只给拖拽用）。
+
+        为什么需要：`update()` 是源码那一套软约束（关节 integrate + 阻尼 0.8、
+        尾关节每 tick 最多修 ±14 px、约束只走 2 遍）。桌宠被鼠标以 8–12 px/tick
+        拖着走时它追不上——实测 PRO 档 `tip→body` 最大 **238 px**、满血档 **267 px**
+        （正常应为 30 px），画面上就是"人偶被拽离开了机械臂、只剩一根细杆连着"。
+        拖拽是**直接操纵**，不该有这层软滞后：这里只跑约束、不跑积分，所以不会注入速度。
+        """
+        for _ in range(max(1, passes)):
+            self.joints[0].pos = base_point
+            for index in range(len(self.joints) - 1):
+                self._constrain(index)
+            # 尾关节是焊到 chunk0 上的（源码 `ConnectToPoint` 的 30 px）
+            tail = self.joints[-1]
+            direction = C.dir_vec(tail.pos, body0)
+            correction = C.dist(tail.pos, body0) - tail.total_length
+            tail.pos = (tail.pos[0] + direction[0] * correction,
+                        tail.pos[1] + direction[1] * correction)
+
     def elbow_pos(self, index: int) -> tuple[float, float]:
         """``Oracle.OracleArm.Joint.ElbowPos(1f, next.pos)`` -- oracle.cs:45-53.
 
