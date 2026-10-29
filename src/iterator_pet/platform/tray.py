@@ -135,6 +135,17 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
         )
         spark_menu.addAction(action_rate)
 
+    character_menu = menu.addMenu("角色")
+    current_character = getattr(window, "character", "pebbles")
+    for key, label in (("pebbles", "五块卵石"), ("past_moon", "仰望皓月")):
+        action_character = QAction(label, character_menu)
+        action_character.setCheckable(True)
+        action_character.setChecked(current_character == key)
+        action_character.triggered.connect(
+            lambda _checked=False, name=key: window.set_character(name)
+        )
+        character_menu.addAction(action_character)
+
     menu.addSeparator()
     action_quit = QAction("退出", menu)
     action_quit.triggered.connect(window.close)

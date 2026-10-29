@@ -13,8 +13,8 @@ from iterator_pet.simulation.state import SimulationState
 BOUNDS = (0.0, 0.0, 1138.0, 608.0)
 
 
-def _sim(scale: float = 1.5) -> SimulationState:
-    sim = SimulationState(BOUNDS, warmup=0)      # warmup=0 只为跑得快；预热不影响心情逻辑
+def _sim(scale: float = 1.5, character: str = "pebbles") -> SimulationState:
+    sim = SimulationState(BOUNDS, warmup=0, character=character)  # warmup=0 只为跑得快
     sim.scale = scale
     # 默认给一个屏上的光标：蓄能期间"光标为 None 累计 40 tick 就 abort"（真实场景里只有
     # 鼠标移出屏幕才会这样），测试不该因为没设光标就莫名 abort
@@ -243,3 +243,43 @@ def test_halo_brightens_during_the_ritual():
         guard += 1
         sim.step(GAME_DT)
     assert abs(sim._cur.halo_gain - 1.0) < 0.02, "仪式结束后光环亮度要回原值"
+
+
+# --------------------------------------------------------------------------
+# 过去之月：删掉杀鼠标、只保留挣脱（用户 2026-10-29 拍板，PLAN-moon §4.1）
+# --------------------------------------------------------------------------
+def test_past_moon_only_struggles_and_never_flashes():
+    sim = _sim(character="past_moon")
+    _drag_until_gate(sim, 0.6)
+    assert sim.kill.phase == "warning", "破闸后应当进挣脱段（warning）"
+
+    # 挣脱段 = warning(40) + stand(20)，全程 kill_fac 恒 0、没有 spark
+    for _ in range(C.KILL_WARNING_TICKS + C.KILL_STAND_TICKS + 2):
+        assert sim.kill.kill_fac == 0.0, "过去之月不许蓄能"
+        assert list(sim.kill.sparks) == [], "过去之月不许产白 spark"
+        sim.step(GAME_DT)
+
+    assert sim.kill.phase == "idle", f"挣脱后应当直接回 idle，实测 {sim.kill.phase}"
+    assert sim.kill.kill_fac == 0.0
+    assert sim.kill.cooldown > 0, "挣脱后要给一条短冷却，防止下一 tick 立刻重入"
+    # 渲染侧：这条路径一次 draw_kill 都不会画（phase 从来不是 charging/flash）
+    assert sim._cur.kill_phase == "idle"
+    assert sim._cur.kill_fac == 0.0
+
+
+def test_past_moon_appearance_matches_the_dm_branch():
+    from iterator_pet.simulation.appearance import PAST_MOON, PEBBLES
+
+    assert PAST_MOON.tremble_only is True
+    assert PAST_MOON.third_eye is True
+    # og.cs:2298-2300 / 2169 / 1939 / 2197 / 1913-1916
+    assert PAST_MOON.skin == (33, 135, 175)
+    assert PAST_MOON.eye_scale_y == 3.0
+    assert PAST_MOON.neck_width == 4.0
+    assert PAST_MOON.hand_half_w == 2.0
+    assert PAST_MOON.body0_h == 16.0
+    # 袍色与五块卵石"同色相、更暗"：DM 的 S/L 更低
+    assert PAST_MOON.gown(0.0) != PEBBLES.gown(0.0)
+    assert sum(PAST_MOON.gown(0.0)) < sum(PEBBLES.gown(0.0))
+    # 光环颜色是实机采样出来的玫红，不是五块卵石的暖橙
+    assert PAST_MOON.halo == (196, 103, 116)

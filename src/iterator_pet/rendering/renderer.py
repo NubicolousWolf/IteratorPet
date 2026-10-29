@@ -135,9 +135,9 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
     # 内暗外亮的径向渐变：源码里这层亮度差来自那盏 400 px 的灯，桌面端直接画出来。
     # 环用一个"到环 0 半径就收尾"的渐变（这样白闪填盘时外缘最亮），
     # bit 用延伸到最外圈 bit 半径的那个。
-    base = QColor(min(255, int(C.HALO_COLOUR[0] * gain)),
-                  min(255, int(C.HALO_COLOUR[1] * gain)),
-                  min(255, int(C.HALO_COLOUR[2] * gain)))
+    base = QColor(min(255, int(state.appearance.halo[0] * gain)),
+                  min(255, int(state.appearance.halo[1] * gain)),
+                  min(255, int(state.appearance.halo[2] * gain)))
 
     def _gradient(outer: float, dim: float) -> QBrush:
         grad = QRadialGradient(QPointF(cx, cy), max(1.0, outer))
@@ -163,9 +163,9 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
     #      · 端点落在最外圈 bit 的外缘，真正"接上"光环
     # 端点接**内圈环**（ring 0）：电光画在最底层，被环和 bit 盖住，视觉上就是"扎进光环里"。
     spark_radius = (C.HALO_RADIUS_BASE + push) * expand * 10.0 + 1.0
-    spark_base = QColor(min(255, int(C.HALO_COLOUR[0] * gain)),
-                        min(255, int(C.HALO_COLOUR[1] * gain)),
-                        min(255, int(C.HALO_COLOUR[2] * gain)))
+    spark_base = QColor(min(255, int(state.appearance.halo[0] * gain)),
+                        min(255, int(state.appearance.halo[1] * gain)),
+                        min(255, int(state.appearance.halo[2] * gain)))
     spark_colour = QColor(
         min(255, int(spark_base.red() * 1.05)),
         min(255, int(spark_base.green() * 1.05)),
@@ -585,6 +585,42 @@ def _ribbon(points, half_width: float) -> QPainterPath:
     return path
 
 
+def _ribbon_taper(points, w_start: float, w_end: float) -> QPainterPath:
+    """和 ``_ribbon`` 一样，但半宽沿路径从 ``w_start`` 线性变到 ``w_end``。
+
+    ``og.cs:2224`` 的脚带是 ``num4 = IsPebbles ? 2f : Lerp(4f, 2f, pow(f, 0.5f))``，
+    ``f`` 从 body1 量到脚 => 脚踝 4 px 半宽、脚趾 2 px。Pebbles 恒 2，所以这条路
+    只有过去之月会走。
+    """
+    if len(points) < 2:
+        return QPainterPath()
+    left: list[tuple[float, float]] = []
+    right: list[tuple[float, float]] = []
+    last = len(points) - 1
+    for i, point in enumerate(points):
+        if i == 0:
+            a, b = points[0], points[1]
+        elif i == last:
+            a, b = points[-2], points[-1]
+        else:
+            a, b = points[i - 1], points[i + 1]
+        t = i / last
+        half = w_start + (w_end - w_start) * (t ** 0.5)   # Lerp(4, 2, sqrt(f))
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        length = hypot(dx, dy) or 1.0
+        nx, ny = -dy / length * half, dx / length * half
+        left.append((point[0] + nx, point[1] + ny))
+        right.append((point[0] - nx, point[1] - ny))
+    path = QPainterPath()
+    path.moveTo(QPointF(*left[0]))
+    for point in left[1:]:
+        path.lineTo(QPointF(*point))
+    for point in reversed(right):
+        path.lineTo(QPointF(*point))
+    path.closeSubpath()
+    return path
+
+
 def _plates(painter: QPainter, points, colour, scale_x: float, scale_y: float,
             alpha: int = 255) -> None:
     """``CentipedeSegment`` sprites laid on top of the cord ribbon.
@@ -723,7 +759,7 @@ def draw_gown(painter: QPainter, state: RenderState) -> None:
     painter.setPen(Qt.PenStyle.NoPen)
     # Underlay in a mid tone: the per-row bands below meet edge to edge, and with
     # antialiasing that can leave a hairline of background at a seam.
-    painter.setBrush(QBrush(qc(C.gown_colour(0.5), 255)))
+    painter.setBrush(QBrush(qc(state.appearance.gown(0.5), 255)))
     painter.drawPath(path)
 
     # Ten bands, one per grid-row pair, each filled with a gradient between that
@@ -739,8 +775,8 @@ def draw_gown(painter: QPainter, state: RenderState) -> None:
         band_path.addPolygon(band)
         band_grad = QLinearGradient(QPointF(*grid[divs // 2][j]),
                                     QPointF(*grid[divs // 2][j + 1]))
-        band_grad.setColorAt(0.0, qc(C.gown_colour(j / (divs - 1.0)), 255))
-        band_grad.setColorAt(1.0, qc(C.gown_colour((j + 1) / (divs - 1.0)), 255))
+        band_grad.setColorAt(0.0, qc(state.appearance.gown(j / (divs - 1.0)), 255))
+        band_grad.setColorAt(1.0, qc(state.appearance.gown((j + 1) / (divs - 1.0)), 255))
         painter.setBrush(QBrush(band_grad))
         painter.drawPath(band_path)
 
@@ -756,7 +792,7 @@ FOOT_HALF_W = 2.0       # og.cs:2224  num4 = IsPebbles ? 2f : ...
 
 
 def _limb_band(painter: QPainter, start, tip, half_w: float, colour,
-               ctrl_a=None, ctrl_b=None) -> None:
+               ctrl_a=None, ctrl_b=None, half_w_start: float | None = None) -> None:
     """``TriangleMesh.MakeLongMesh(7)``: a 7-ring bezier band, filled not stroked.
 
     A ``QPen`` of width ``half_w`` draws a 2*half_w line; the mesh's vertices are
@@ -772,15 +808,22 @@ def _limb_band(painter: QPainter, start, tip, half_w: float, colour,
     points = [_bezier(start, ctrl_a, ctrl_b, tip, n / 6.0) for n in range(7)]
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QBrush(qc(colour, 255)))
-    painter.drawPath(_ribbon(points, half_w))
+    if half_w_start is None:
+        painter.drawPath(_ribbon(points, half_w))
+    else:
+        painter.drawPath(_ribbon_taper(points, half_w_start, half_w))
 
 
 def draw_puppet_body(painter: QPainter, state: RenderState) -> None:
     """Two Circle20 chunks and two MakeLongMesh(7) legs with haloGlyph feet."""
-    skin = C.SKIN_COLOUR
+    skin = state.appearance.skin
     body_sprite = tinted("Circle20", skin)
-    for centre in (state.body0, state.body1):
-        painter.drawPixmap(QRectF(centre[0] - 6.0, centre[1] - 6.0, 12.0, 12.0), body_sprite, QRectF(body_sprite.rect()))
+    # og.cs:1913-1916  IsMoon || IsPastMoon 把 chunk0 拉成 (rad+2)/10 -> 16 px 竖椭圆；
+    # 其余角色是 rad/10 -> 12 px 正圆。
+    for centre, height in ((state.body0, state.appearance.body0_h), (state.body1, 12.0)):
+        painter.drawPixmap(
+            QRectF(centre[0] - 6.0, centre[1] - height * 0.5, 12.0, height),
+            body_sprite, QRectF(body_sprite.rect()))
 
     cap = tinted("haloGlyph-1", skin)
     # og.cs:1648/1770  both the foot force and the knee are built from
@@ -791,7 +834,7 @@ def draw_puppet_body(painter: QPainter, state: RenderState) -> None:
     # og.cs:1518  neckSprite sits between bodyChunks and feet in the sprite order,
     # so it is drawn here -- before the legs, the robe and the hands. Drawing it
     # inside draw_puppet_head put the pink neck on top of the orange robe.
-    painter.setPen(QPen(qc(skin), 3.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+    painter.setPen(QPen(qc(skin), state.appearance.neck_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
     painter.drawLine(QPointF(*state.body0), QPointF(*state.head))
 
     down = C.dir_vec(state.body0, state.body1)
@@ -810,12 +853,15 @@ def draw_puppet_body(painter: QPainter, state: RenderState) -> None:
         # the mesh, and the cap has the LOWER index, so it is drawn first.
         painter.drawPixmap(QRectF(tip[0] - 3.0, tip[1] - 3.0, 6.0, 6.0),
                            cap, QRectF(cap.rect()))
-        _limb_band(painter, state.body1, tip, FOOT_HALF_W, skin, ctrl_a, ctrl_b)
+        # og.cs:2224  脚带：Pebbles 恒 2；其它角色 Lerp(4, 2, sqrt(f))
+        start_w = 4.0 if state.appearance.leg_taper else None
+        _limb_band(painter, state.body1, tip, state.appearance.leg_half_w, skin,
+                   ctrl_a, ctrl_b, half_w_start=start_w)
 
 
 def draw_puppet_hands(painter: QPainter, state: RenderState) -> None:
     """Hands sit IN FRONT of the gown: firstHandSprite follows robeSprite."""
-    skin = C.SKIN_COLOUR
+    skin = state.appearance.skin
     cap = tinted("haloGlyph-1", skin)
     up = C.dir_vec(state.body1, state.body0)
     perp = (-up[1], up[0])
@@ -833,7 +879,7 @@ def draw_puppet_hands(painter: QPainter, state: RenderState) -> None:
         # the sleeve, so the cap has the lower index and is painted first.
         painter.drawPixmap(QRectF(tip[0] - 3.0, tip[1] - 3.0, 6.0, 6.0),
                            cap, QRectF(cap.rect()))
-        _limb_band(painter, anchor, tip, HAND_HALF_W, C.gown_colour(0.0), ctrl_a, ctrl_b)
+        _limb_band(painter, anchor, tip, state.appearance.hand_half_w, state.appearance.gown(0.0), ctrl_a, ctrl_b)
 
 
 def face_look(look_world, axis):
@@ -927,7 +973,7 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     # HeadSprite: Circle20 at (rad/9, rad/11), rotated with the body axis
     head_w = 20.0 * HEAD_RAD / 9.0
     head_h = 20.0 * HEAD_RAD / 11.0
-    sprite = tinted("Circle20", C.SKIN_COLOUR)
+    sprite = tinted("Circle20", state.appearance.skin)
     painter.save()
     painter.translate(QPointF(*state.head))
     painter.rotate(angle)
@@ -948,7 +994,7 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     # scaleY = Lerp(1, IsPebbles ? 2 : 3, eyesOpen): with the eyes open the blit
     # is 1..2 px wide and exactly 2 px tall. The near-black (0.02, 0, 0) at
     # og.cs:1948 is Moon's branch; Pebbles keeps the FSprite default, white.
-    eye = tinted("pixel", C.EYE_COLOUR)
+    eye = tinted("pixel", state.appearance.eye)
     for index in (0, 1):
         offset, width = eye_offset(look, perp, axis, index)
         ex = state.head[0] + offset[0]
@@ -957,9 +1003,48 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
         painter.translate(QPointF(ex, ey))
         painter.rotate(angle)
         painter.drawPixmap(
-            QRectF(-width * 0.5, -C.EYE_SCALE_Y * 0.5, width, C.EYE_SCALE_Y),
+            QRectF(-width * 0.5, -state.appearance.eye_scale_y * 0.5, width, state.appearance.eye_scale_y),
             eye, QRectF(eye.rect()))
         painter.restore()
+
+    # og.cs:2238 第三只眼在头和两只眼之后画
+    draw_third_eye(painter, state)
+
+
+def draw_third_eye(painter: QPainter, state: RenderState) -> None:
+    """``og.cs:2238-2254`` 第三只眼（IsMoon || IsPastMoon || IsStraw）。
+
+    ```csharp
+    p = head + perp*(look.x*2.5) + axis*(-2 - look.y*1.5);
+    rotation = AimFromOneVectorToAnother(p, head - axis*10);
+    scaleX = Lerp(0.2, 0.15, |look.x|);         // Circle20 => 4.0 .. 3.0 px
+    scaleY = LerpMap(look.y, 0, 1, 0.2, 0.05);  //          => 4.0 .. 1.0 px
+    ```
+    颜色在 ``og.cs:2373-2376``：``Lerp(magenta, skin, 0.3)``。
+    """
+    ap = state.appearance
+    if not ap.third_eye or ap.third_eye_colour is None:
+        return
+    axis = C.dir_vec(state.head, state.body0)
+    perp = (axis[1], -axis[0])
+    look = face_look(state.look_dir, axis)
+    offset = -2.0 - look[1] * 1.5
+    px = state.head[0] + perp[0] * (look[0] * 2.5) + axis[0] * offset
+    py = state.head[1] + perp[1] * (look[0] * 2.5) + axis[1] * offset
+    width = 20.0 * C._lerp(0.2, 0.15, abs(look[0]))
+    t = max(0.0, min(1.0, look[1]))
+    height = 20.0 * C._lerp(0.2, 0.05, t)
+    # 局部 +y 要对准"从眼睛指回头部"（AimFromOneVectorToAnother 的差向）
+    aim_x = (state.head[0] - axis[0] * 10.0) - px
+    aim_y = (state.head[1] - axis[1] * 10.0) - py
+    theta = degrees(atan2(-aim_x, aim_y))
+    sprite = tinted("Circle20", ap.third_eye_colour)
+    painter.save()
+    painter.translate(QPointF(px, py))
+    painter.rotate(theta)
+    painter.drawPixmap(QRectF(-width * 0.5, -height * 0.5, width, height),
+                       sprite, QRectF(sprite.rect()))
+    painter.restore()
 
 
 # --------------------------------------------------------------------------

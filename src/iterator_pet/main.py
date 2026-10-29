@@ -50,6 +50,7 @@ def render_preview(
     seconds: float = 4.0,
     scale: float = 1.0,
     background: bool = True,
+    character: str = "pebbles",
 ) -> Path:
     """Render the scene offscreen at a fixed time, for visual inspection/tests."""
     app = QApplication.instance() or QApplication([])  # noqa: F841 (needed for QPainter)
@@ -58,7 +59,8 @@ def render_preview(
     prepare(load().install or None)          # 只在画之前准备好素材，绘制路径里不再提取
     width, height = size
     zoom = max(0.3, min(4.0, float(scale))) if scale else 1.0
-    sim = SimulationState((0.0, 0.0, float(width) / zoom, float(height) / zoom))
+    sim = SimulationState((0.0, 0.0, float(width) / zoom, float(height) / zoom),
+                          character=character)
     for _ in range(max(0, int(seconds / PHYSICS_DT))):
         sim.step(PHYSICS_DT)
 

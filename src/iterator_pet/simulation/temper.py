@@ -69,7 +69,7 @@ class KillRitual:
     """杀鼠标的仪式状态机（只有状态，没有美术）。"""
 
     __slots__ = ("phase", "kill_fac", "_t", "cooldown", "anchor", "focus", "sparks", "rng",
-                 "retreat", "_still", "_lost")
+                 "retreat", "_still", "_lost", "tremble_only")
 
     def __init__(self) -> None:
         self.phase = IDLE
@@ -84,6 +84,8 @@ class KillRitual:
         # 挣脱目标（人偶要退到离光标 1.5×talk 距离处站定）；None = 还没算
         self.retreat: tuple[float, float] | None = None
         self._still = 0
+        # 角色是否只有"挣脱"、没有后续的白光（过去之月，用户 2026-10-29 拍板）
+        self.tremble_only = False
 
     # -- 查询 ---------------------------------------------------------------
     @property
@@ -107,7 +109,9 @@ class KillRitual:
         return self.active
 
     # -- 状态迁移 -----------------------------------------------------------
-    def begin(self, anchor: tuple[float, float] | None, ticks: int) -> None:
+    def begin(self, anchor: tuple[float, float] | None, ticks: int,
+              tremble_only: bool = False) -> None:
+        self.tremble_only = tremble_only
         self.phase = WARNING
         self.kill_fac = 0.0
         self._t = 0
@@ -164,6 +168,12 @@ class KillRitual:
             if cursor is not None:
                 self.focus = cursor
             if self._t >= C.KILL_WARNING_TICKS + C.KILL_STAND_TICKS:
+                if self.tremble_only:
+                    # 过去之月：挣脱+站定之后**到此为止**（用户 2026-10-29：删掉杀鼠标，
+                    # 只保留挣脱）。abort() 顺带给了 KILL_ABORT_COOLDOWN 的短冷却，
+                    # kill_fac 全程为 0 → 渲染层一次 draw_kill 都不会画。
+                    self.abort()
+                    return "tremble_done"
                 self.phase = CHARGING
                 self._t = 0
             return None

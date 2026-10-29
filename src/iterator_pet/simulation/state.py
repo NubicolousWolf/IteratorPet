@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from math import atan2, cos, degrees, hypot, radians, sin
 
 from . import constants as C
+from .appearance import Appearance, PEBBLES, appearance_for
 from .temper import KillRitual, Temper
 from .arm import ArmChain
 from .behavior import BehaviourSelector, Wander
@@ -79,6 +80,8 @@ class RenderState:
     kill_phase: str = "idle"
     kill_sparks: tuple = ()
     kill_flash: float = 0.0
+    # 角色外观参数（simulation/appearance.py）。不插值，直接取最新快照。
+    appearance: Appearance = PEBBLES
 
     def lerp(self, other: "RenderState", alpha: float) -> "RenderState":
         if alpha <= 0.0:
@@ -137,6 +140,7 @@ class RenderState:
             kill_phase=other.kill_phase,
             kill_sparks=other.kill_sparks,     # 不插值：列表长度会变
             kill_flash=mix_scalar(self.kill_flash, other.kill_flash, alpha),
+            appearance=other.appearance,
         )
 
 
@@ -144,7 +148,9 @@ class SimulationState:
     WARMUP_TICKS = 320
 
     def __init__(self, bounds: tuple[float, float, float, float], inset: float = 26.0,
-                 seed: int = 1234, warmup: int | None = None):
+                 seed: int = 1234, warmup: int | None = None,
+                 character: str = "pebbles"):
+        self.appearance = appearance_for(character)
         self.inset = inset
         self._bounds = bounds
         self.rail = RailPath(self._inset())
@@ -415,8 +421,8 @@ class SimulationState:
                 self.creature.chunk1 = (target[0], target[1] + 9.0)
                 self.kill._still += 1
         event = self.kill.step(cursor, C.KILL_LOCK_SCREEN_PX / max(0.2, float(self.scale)))
-        if event == "abort":
-            # 蓄能失败（光标跑开）：心情抬到 -0.30 并进短冷却，避免下一 tick 立刻重入
+        if event in ("abort", "tremble_done"):
+            # 蓄能失败（光标跑开）或"只有挣脱"的角色跑完挣脱段：心情抬到 -0.30 并进短冷却
             self.temper.value = C.TEMPER_AFTER_ABORT
         self.kill.tick_sparks()
         if event == "flash":
@@ -506,7 +512,7 @@ class SimulationState:
             # 锚点：光标优先；光标不在屏上（None）就用拖拽点/头顶，
             # 否则 anchor 为 None 时永远量不出"跑开"，abort 分支形同虚设（实测踩过）
             anchor = self.cursor or self.drag_point or self.creature.head
-            self.kill.begin(anchor, self.ticks)
+            self.kill.begin(anchor, self.ticks, self.appearance.tremble_only)
             # 挣脱目标：从人偶**背离光标**方向退 1.5 个 talk 身位（用户 2026-10-29 要求），
             # 再夹进腔室和臂展（否则退到屏幕外/臂展外）
             # 方向：从光标指向人偶（保持"在光标外侧"的站位），距离 = 1.5 个 talk 身位。
@@ -520,7 +526,9 @@ class SimulationState:
             target = self._clamp_to_room(target)
             target = self._reachable(self.rail.pose(self.frame_pos).point, target)
             self.kill.retreat = target
-            self.temper.value = C.TEMPER_AFTER_KILL
+            # 只有挣脱的角色：进段就把心情抬到 -0.30（不会再有白光那一下把它压到 -0.15）
+            self.temper.value = (C.TEMPER_AFTER_ABORT if self.appearance.tremble_only
+                                 else C.TEMPER_AFTER_KILL)
             self._tick_kill()
             return
 
@@ -867,6 +875,7 @@ class SimulationState:
             halo_sparks=[
                 (c.stuck_at, c.handle, c.light_up) for c in self.halo.connections
             ],
+            appearance=self.appearance,
             kill_fac=self.kill.kill_fac,
             kill_anchor=self.kill.focus or self.kill.anchor,
             kill_phase=self.kill.phase,

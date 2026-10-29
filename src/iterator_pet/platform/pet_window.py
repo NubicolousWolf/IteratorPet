@@ -291,7 +291,8 @@ class PetWindow(PetCanvas):
         # （1138x608 约 1.6 s，40% 档的 2845x1520 要 11.7 s —— 这就是"切尺寸卡一下"）。
         # warmup=0 只要 0.4 ms，之后让 40 TPS 的固定步长循环自然把关节/缆线跑稳，
         # 用户看到的是一秒左右"刚站住"的过渡，而不是整个界面冻住。
-        self.simulation = SimulationState(bounds, seed=seed, warmup=0)
+        self.simulation = SimulationState(bounds, seed=seed, warmup=0,
+                                          character=self.character)
         self.simulation.scale = zoom
         # 心情跨尺寸保留（否则换一下大小就"消气"），仪式状态机复位（不许留半个仪式）
         self.simulation.temper.value = carried_temper
@@ -326,6 +327,28 @@ class PetWindow(PetCanvas):
     @property
     def spark_rate(self) -> str:
         return getattr(self.config, "spark_rate", "eco")
+
+    # -- character ----------------------------------------------------------
+    @property
+    def character(self) -> str:
+        return getattr(self.config, "character", "pebbles")
+
+    def set_character(self, key: str) -> None:
+        """切换角色（托盘「角色」菜单）。外观参数在 simulation/appearance.py。
+
+        只换外观，**仿真一行不动**：所以不重建 SimulationState，只把 appearance
+        换掉再刷一帧。换角色时结束拖拽与仪式（避免"她的白光"这种跨角色的残留状态）。
+        """
+        from ..simulation.appearance import CHARACTERS
+
+        if key not in CHARACTERS or key == self.character:
+            return
+        self.simulation.end_drag(fling=False)
+        self.simulation.kill.cancel()
+        self.config.character = key
+        self.simulation.appearance = CHARACTERS[key]
+        self.update()
+        save(self.config)
 
     def toggle_click_through(self) -> None:
         self.simulation.end_drag(fling=False)
@@ -406,6 +429,16 @@ class PetWindow(PetCanvas):
             )
             spark_menu.addAction(action_rate)
 
+        character_menu = menu.addMenu("角色")
+        for key, label in (("pebbles", "五块卵石"), ("past_moon", "仰望皓月")):
+            action_character = QAction(label, character_menu)
+            action_character.setCheckable(True)
+            action_character.setChecked(self.character == key)
+            action_character.triggered.connect(
+                lambda _checked=False, name=key: self.set_character(name)
+            )
+            character_menu.addAction(action_character)
+
         menu.addSeparator()
         action_quit = QAction("退出", menu)
         action_quit.triggered.connect(self.close)
@@ -423,7 +456,8 @@ def create_window(config: Config | None = None, sprites=None) -> PetWindow:
     geo = snapshot.available
     zoom = max(0.3, min(4.0, float(cfg.scale)))
     sim = SimulationState(
-        (0.0, 0.0, float(geo.width()) / zoom, float(geo.height()) / zoom)
+        (0.0, 0.0, float(geo.width()) / zoom, float(geo.height()) / zoom),
+        character=getattr(cfg, "character", "pebbles"),
     )
     window = PetWindow(sim, cfg, sprites=sprites)
     window.setGeometry(geo)

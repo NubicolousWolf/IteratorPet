@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iterator-pet"
-version = "0.1.3"
+version = "0.1.4"
 requires-python = ">=3.12"
 # UnityPy 只在“从本机游戏切素材”时才用；缺了也能跑（用程序内生成的图元兜底），
 # 但发布版必须带上，否则第一次运行拿不到真精灵。
