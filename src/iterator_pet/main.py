@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from .config import Config, load, save
 from .platform.hotkey import GlobalHotkey
+from .platform import cursorfx
 from .platform.pet_window import create_window
 from .platform.tray import make_icon
 from .rendering.renderer import draw_scene
@@ -116,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    # 上一次硬崩可能留下"忙"光标（atexit 在硬崩下不执行）→ 启动先自愈一次
+    cursorfx.self_heal()
     app.setApplicationName("Iterator Pet")
     app.setWindowIcon(make_icon())
     app.setQuitOnLastWindowClosed(False)

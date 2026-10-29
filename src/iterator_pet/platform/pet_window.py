@@ -16,7 +16,7 @@ from ..rendering.canvas import PetCanvas
 from ..simulation.state import SimulationState
 from .fixed_loop import DEFAULT_MAX_SUBSTEPS, GAME_DT, FixedStepLoop
 from .workspace import ScreenWorkspace
-from . import windows_overlay
+from . import cursorfx, windows_overlay
 
 
 def cursor_sim_point(
@@ -71,6 +71,7 @@ class PetWindow(PetCanvas):
         self.click_through = bool(config.click_through)
         self._paused = False
         self._press_global = None
+        self._cursor_fx_fired = False
         self._press_at = 0.0
         self._last = time.perf_counter()
         self._origin = (0.0, 0.0)
@@ -117,6 +118,7 @@ class PetWindow(PetCanvas):
     def closeEvent(self, event) -> None:  # noqa: N802
         self.simulation.end_drag(fling=False)
         self.simulation.kill.cancel()
+        cursorfx.restore()
         self._timer.stop()
         # NO save() HERE. Every mutator (toggle_click_through / toggle_rail)
         # already persists, so closing wrote nothing new -- but a TOOL
@@ -160,6 +162,14 @@ class PetWindow(PetCanvas):
         else:
             self._track_cursor()
         self.simulation.step(dt)
+        # 杀鼠标的 flash 段：换忙光标 0.3 s（档 2）。用"进 flash 的第一 tick"当触发沿
+        if getattr(self.simulation, "kill", None) is not None:
+            if self.simulation.kill.phase == "flash":
+                if not self._cursor_fx_fired and self.config.cursor_fx:
+                    cursorfx.flash()
+                self._cursor_fx_fired = True
+            else:
+                self._cursor_fx_fired = False
 
     def _track_cursor(self) -> None:
         """Feed the global cursor position to the puppet so it can look at it."""
@@ -278,6 +288,7 @@ class PetWindow(PetCanvas):
         self.simulation.scale = zoom
         # 心情跨尺寸保留（否则换一下大小就"消气"），仪式状态机复位（不许留半个仪式）
         self.simulation.temper.value = carried_temper
+        cursorfx.restore()
         self._last = time.perf_counter()
         self.update()
 
@@ -286,6 +297,7 @@ class PetWindow(PetCanvas):
         if not self._paused:
             self.simulation.end_drag(fling=False)   # 进入暂停：结束拖拽（暂停不消费 drag_point）
             self.simulation.kill.cancel()           # 暂停时取消仪式，否则白闪会冻在屏幕上
+        cursorfx.restore()
         self._paused = not self._paused
         if self._paused:
             self._loop.pause()
@@ -311,6 +323,7 @@ class PetWindow(PetCanvas):
     def toggle_click_through(self) -> None:
         self.simulation.end_drag(fling=False)
         self.simulation.kill.cancel()          # 穿透后就收不到事件了，先结束拖拽
+        cursorfx.restore()
         self.click_through = not self.click_through
         self._apply_click_through()
         self.config.click_through = self.click_through
@@ -350,6 +363,18 @@ class PetWindow(PetCanvas):
         menu.addAction(action_click)
 
         menu.addSeparator()
+        action_cursor = QAction("光标特效（杀鼠标时）", menu)
+        action_cursor.setCheckable(True)
+        action_cursor.setChecked(bool(getattr(self.config, "cursor_fx", True)))
+
+        def _toggle_cursor(checked: bool) -> None:
+            self.config.cursor_fx = bool(checked)
+            cursorfx.set_enabled(bool(checked))
+            save(self.config)
+
+        action_cursor.triggered.connect(_toggle_cursor)
+        menu.addAction(action_cursor)
+
         action_kill = QAction("杀鼠标（调试）", menu)
         action_kill.triggered.connect(self.trigger_kill)
         menu.addAction(action_kill)

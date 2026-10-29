@@ -43,6 +43,8 @@ class Config:
     install: str = ""
     # 电光频率档位：off / eco / computing（开发者菜单里切，见 constants.HALO_SPARK_RATES）
     spark_rate: str = "eco"
+    # 杀鼠标时的光标特效（档 2：换忙光标 0.3 s）。默认开，可用托盘开关 / 环境变量关掉
+    cursor_fx: bool = True
 
 
 def config_dir() -> Path:

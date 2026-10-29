@@ -104,6 +104,17 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
     menu.addAction(action_dev)
 
     menu.addSeparator()
+    action_cursor = QAction("光标特效（杀鼠标时）", menu)
+    action_cursor.setCheckable(True)
+    action_cursor.setChecked(bool(getattr(window.config, "cursor_fx", True)))
+    def _toggle_cursor(checked: bool) -> None:
+        window.config.cursor_fx = bool(checked)
+        from . import cursorfx
+        cursorfx.set_enabled(bool(checked))
+        save(window.config)
+    action_cursor.triggered.connect(_toggle_cursor)
+    menu.addAction(action_cursor)
+
     size_menu = menu.addMenu("尺寸")
     current_size = getattr(window, "size_preset", "full")
     for key, (factor, label) in SIZE_PRESETS.items():
