@@ -118,7 +118,7 @@ class PetWindow(PetCanvas):
     def closeEvent(self, event) -> None:  # noqa: N802
         self.simulation.end_drag(fling=False)
         self.simulation.kill.cancel()
-        cursorfx.restore()
+        cursorfx.release()
         self._timer.stop()
         # NO save() HERE. Every mutator (toggle_click_through / toggle_rail)
         # already persists, so closing wrote nothing new -- but a TOOL
@@ -162,11 +162,18 @@ class PetWindow(PetCanvas):
         else:
             self._track_cursor()
         self.simulation.step(dt)
+        cursorfx.tick()
         # 杀鼠标的 flash 段：换忙光标 0.3 s（档 2）。用"进 flash 的第一 tick"当触发沿
         if getattr(self.simulation, "kill", None) is not None:
             if self.simulation.kill.phase == "flash":
-                if not self._cursor_fx_fired and self.config.cursor_fx:
-                    cursorfx.flash()
+                if not self._cursor_fx_fired and getattr(self.config, "cursor_fx", True):
+                    anchor = self._drawn_state.kill_anchor if self._drawn_state else None
+                    if anchor is not None:
+                        geo = self.geometry()
+                        sx = geo.x() + anchor[0] * self.scale
+                        sy = geo.y() + anchor[1] * self.scale
+                        # 掉到工作区底部（留 2 px 免得压到任务栏边沿）
+                        cursorfx.start(sx, sy, geo.y() + geo.height() - 2.0)
                 self._cursor_fx_fired = True
             else:
                 self._cursor_fx_fired = False
@@ -288,7 +295,7 @@ class PetWindow(PetCanvas):
         self.simulation.scale = zoom
         # 心情跨尺寸保留（否则换一下大小就"消气"），仪式状态机复位（不许留半个仪式）
         self.simulation.temper.value = carried_temper
-        cursorfx.restore()
+        cursorfx.release()
         self._last = time.perf_counter()
         self.update()
 
@@ -297,7 +304,7 @@ class PetWindow(PetCanvas):
         if not self._paused:
             self.simulation.end_drag(fling=False)   # 进入暂停：结束拖拽（暂停不消费 drag_point）
             self.simulation.kill.cancel()           # 暂停时取消仪式，否则白闪会冻在屏幕上
-        cursorfx.restore()
+        cursorfx.release()
         self._paused = not self._paused
         if self._paused:
             self._loop.pause()
@@ -323,7 +330,7 @@ class PetWindow(PetCanvas):
     def toggle_click_through(self) -> None:
         self.simulation.end_drag(fling=False)
         self.simulation.kill.cancel()          # 穿透后就收不到事件了，先结束拖拽
-        cursorfx.restore()
+        cursorfx.release()
         self.click_through = not self.click_through
         self._apply_click_through()
         self.config.click_through = self.click_through

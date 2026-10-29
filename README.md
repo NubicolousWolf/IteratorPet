@@ -36,6 +36,8 @@ python -m iterator_pet.launcher             # 发布版入口
 
 3. 鼠标移动时，fp有概率会追着鼠标跑。有点bug。
 
+4. 你可以拖拽fp的人偶和底座。有很多bug，但你可以，fp对拖拽作出简单的反应。
+
 ### 美术资源
 
 启动时从你自己的 Rain World 安装里提取基础图元到 `%LOCALAPPDATA%\IteratorPet\cache\sprites\`。
