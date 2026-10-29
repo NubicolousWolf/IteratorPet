@@ -2,21 +2,20 @@
 
 一只迭代器桌宠，确切地说是fp和lttm桌宠。
 
-> 预览图由本仓库代码离线渲染：`python -m iterator_pet.main --preview out.png --width 1280 --height 720 --scale 2.2`
+> 预览图由本仓库代码离线渲染：`python -m iterator\\\_pet.main --preview out.png --width 1280 --height 720 --scale 2.2`
 
 ## 发布版
 
 发布包解开后直接双击启动.exe。
 
-觉得太大 / 太小：右键托盘图标 → 尺寸：便携版（40%）· 青春版（75%）· 满血版（100%，默认）· PRO（150%）
-同一个菜单里还有电光频率和角色。
 
 
 ### 首次运行 / 之后每次
 
 * **第一次运行**：自动在 Steam 库里找正版 Rain World，找不到会弹窗让你指到游戏根目录（里面有 `RainWorld.exe` 和
-  `RainWorld_Data` 文件夹）
+`RainWorld\\\_Data` 文件夹）
 * **之后每次运行**：配置里的路径还在就直接启动；缓存缺了才重新切一次。
+
 
 
 ## 从源码运行
@@ -24,43 +23,39 @@
 ```bash
 python -m pip install -r requirements.txt   # PySide6 + UnityPy
 $env:PYTHONPATH = "src"
-python -m iterator_pet.main                 # 桌宠本体
-python -m iterator_pet.launcher             # 发布版入口
+python -m iterator\\\_pet.main                 # 桌宠本体
+python -m iterator\\\_pet.launcher             # 发布版入口
 ```
 
 ## 功能
 
 1. 迭代器现在会在你的屏幕上无所事事地漫游，因为这里没有三重肯定可以算。
-
-2. 鼠标悬停时，随时间增加触发迭代器看着鼠标的行为的概率。
-
-3. 鼠标移动时，迭代器有概率会追着鼠标跑。有点bug。
-
-4. 你可以拖拽迭代器的人偶和底座。有很多bug，但你可以，迭代器对拖拽作出简单的反应。
-
-5. 托盘菜单 →「角色」可以在五块卵石 / 仰望皓月之间切换。两人行为基本一致，但仰望皓月的脾气更好：
-   她不会杀鼠标，只会挣脱。
+2. 鼠标悬停时，随时间增加触发迭代器看着鼠标的行为的概率，并触发对话。
+3. 鼠标移动时，迭代器有概率会追着鼠标跑。
+4. 你可以拖拽迭代器的人偶和底座。有很多bug，但你可以。迭代器会对拖拽作出不同反应，不过都不是什么好反应！
+5. 托盘菜单 →「角色」可以在五块卵石 / 仰望皓月之间切换。尺寸、电光频率可以调节，对话可以关。
+6. 你可以在 `%LOCALAPPDATA%\IteratorPet\lines.json` 里自定义迭代器们会说的话（改完两秒内生效；写「（不触发对话）」表示这次不说话）。
+7. 按ctrl+alt+q强制退出。
 
 ### 美术资源
 
-启动时从你自己的 Rain World 安装里提取基础图元到 `%LOCALAPPDATA%\IteratorPet\cache\sprites\`。
+启动时从你自己的 Rain World 安装里提取基础图元到 `%LOCALAPPDATA%\\\\IteratorPet\\\\cache\\\\sprites\\\\`。
 安装路径可用环境变量覆盖：
 
 ```powershell
-$env:RAINWORLD_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
+$env:RAINWORLD\\\_DIR = "D:\\\\SteamLibrary\\\\steamapps\\\\common\\\\Rain World"
 ```
 
 ## 已知BUG
 
-* 迭代器追随鼠标的行为有点问题，可能导致自己被拽离机械臂。暂时不打算修。
-* 电光看起来不太对。
+* 迭代器寻路行为有点问题，目标位置不可达的时候可能会拽着机械臂卡在原地而不是换路径。暂时不打算修。
+* 电光看起来略显简陋。
 * 改了尺寸之后电光需要重新设置。
 
 ## 待办事项
 
-* 点击和拖拽反应
-* 物品和对话系统
-* 其他迭代器，或自定义
+* 物品系统
+
 
 
 ## 许可与致谢
@@ -69,4 +64,5 @@ $env:RAINWORLD_DIR = "D:\SteamLibrary\steamapps\common\Rain World"
 所有；本仓库不含任何游戏素材，仅在运行时从用户本机安装读取基础图元。
 
 受https://github.com/lingxiaojun/slugcatpet/ 启发，参考了这个项目的桌宠行为。
-我不懂python，所以如果你觉得代码很烂，请责怪DSH吧。
+我完全没有审查代码！所以如果你觉得代码很烂，请责怪DSH吧。
+

@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QPixmap
 from PySide6.QtWidgets import QWidget
 
+from .bubble import draw_bubble_world
 from .renderer import draw_scene
 
 
@@ -35,6 +36,8 @@ class PetCanvas(QWidget):
         self.alpha_provider = alpha_provider or (lambda: 0.0)
         self.sprites = sprites
         self.scale = max(0.3, min(4.0, float(scale)))
+        # 对话气泡开关（托盘「对话」）。窗口层会按 config 覆盖它。
+        self.dialogue_enabled = True
         self._frame: QPixmap | None = None
         self._frame_key: tuple | None = None
         # 命中测试要用的"屏幕上真正画出去的那一份"（帧缓存/alpha 会让重新插值的
@@ -70,6 +73,25 @@ class PetCanvas(QWidget):
             self._frame = pixmap
         return self._frame
 
+    def _paint_dialogue(self, painter: QPainter) -> None:
+        """画当前这句台词（屏幕像素，锚点从仿真 px 转换一次）。"""
+        if not self.dialogue_enabled:
+            return
+        view = getattr(self.simulation, "dialogue_view", None)
+        if view is None:
+            return
+        data = view()
+        if not data:
+            return
+        draw_bubble_world(
+            painter,
+            text=data["text"],
+            size_fac=data["size_fac"],
+            anchor_sim=data["anchor"],
+            scale=self.scale,
+            screen=(float(self.width()), float(self.height())),
+        )
+
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -94,4 +116,7 @@ class PetCanvas(QWidget):
             self._frame_key = key
 
         painter.drawPixmap(0, 0, self._frame)
+        # 气泡必须在**缓存帧之后**单独画：它每 tick 都在变（逐字/收起），
+        # 进 draw_scene 会让整屏每一帧都重画（审计 A1/A2 的代价就是托盘卡顿）。
+        self._paint_dialogue(painter)
         painter.end()

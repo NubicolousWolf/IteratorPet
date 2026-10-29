@@ -46,7 +46,7 @@ README = """迭代器 · 桌面宠物
   3. 按 Ctrl+Alt+Q，任何时候都能退出。
 
 托盘菜单里还能：**尺寸**（便携版 40% / 青春版 75% / 满血版 100% / PRO 150%）、
-**角色**（五块卵石 / 仰望皓月）、
+**角色**（五块卵石 / 仰望皓月）、**对话**（开 / 关）、
 电光频率（关 / 节能 / computing）、暂停/继续、开关鼠标穿透、开关开发者面板。
 觉得太大就先切到"便携版"或"青春版"，切完立刻生效并记住。
 
@@ -61,6 +61,7 @@ README = """迭代器 · 桌面宠物
 数据放在哪
 ----------
   %LOCALAPPDATA%\\IteratorPet\\config.json    设置
+  %LOCALAPPDATA%\\IteratorPet\\lines.json     迭代器说的话（可以自己加，两秒内生效）
   %LOCALAPPDATA%\\IteratorPet\\cache\\        从你本机游戏里切出来的图元
   %LOCALAPPDATA%\\IteratorPet\\launcher.log   启动过程日志（排障用）
 

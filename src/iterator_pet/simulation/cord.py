@@ -30,6 +30,8 @@ class Cord:
         # 整条缆线自然整体上移。
         self.bounds = (x, y, w, h)
         tile = h / 28.0
+        # 气泡定位要用**同一个** tile（'插口往上两格'），所以存下来供上层读
+        self.tile = tile
         self.socket = (x + w * 0.518, y + h + tile * 1.5)
         self.rest = C.CORD_REST  # fixed 10 px pitch, as the game does
         self.stuck_index = 0     # set once the node count is known

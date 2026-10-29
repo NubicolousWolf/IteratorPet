@@ -45,6 +45,8 @@ class Config:
     spark_rate: str = "eco"
     # 杀鼠标时的光标特效（档 2：换忙光标 0.3 s）。默认开，可用托盘开关 / 环境变量关掉
     cursor_fx: bool = True
+    # 对话气泡开关（托盘「对话」）。关掉后不抽池、不绘制。
+    dialogue_enabled: bool = True
     # 角色：pebbles（五块卵石）/ past_moon（过去之月，倾盆大雨 DLC 那位）。
     # 外观参数在 simulation/appearance.py；托盘「角色」菜单切换。
     character: str = "pebbles"

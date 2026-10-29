@@ -146,6 +146,14 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
         )
         character_menu.addAction(action_character)
 
+    action_dialogue = QAction("对话", menu)
+    action_dialogue.setCheckable(True)
+    action_dialogue.setChecked(bool(getattr(window.config, "dialogue_enabled", True)))
+    action_dialogue.triggered.connect(
+        lambda checked: window.set_dialogue_enabled(bool(checked))
+    )
+    menu.addAction(action_dialogue)
+
     menu.addSeparator()
     action_quit = QAction("退出", menu)
     action_quit.triggered.connect(window.close)

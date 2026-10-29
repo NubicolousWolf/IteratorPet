@@ -71,8 +71,25 @@ def render_preview(
         from PySide6.QtGui import QColor
 
         painter.fillRect(image.rect(), QColor("#171216"))
+    state = sim.interpolate(1.0)
+    painter.save()
     painter.scale(zoom, zoom)
-    draw_scene(painter, sim.interpolate(1.0))
+    draw_scene(painter, state)
+    painter.restore()
+    # 气泡在**屏幕像素**画（坐标转换在 draw_bubble_world 里做一次），
+    # 所以必须跳出 zoom 变换 —— 否则 27 px 会被再乘一个 zoom（审计 A1）。
+    view = sim.dialogue_view()
+    if view:
+        from .rendering.bubble import draw_bubble_world
+
+        draw_bubble_world(
+            painter,
+            text=view["text"],
+            size_fac=view["size_fac"],
+            anchor_sim=view["anchor"],
+            scale=zoom,
+            screen=(float(width), float(height)),
+        )
     painter.end()
 
     out = Path(path)

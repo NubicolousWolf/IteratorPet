@@ -19,6 +19,9 @@ from math import atan2, cos, degrees, hypot, radians, sin
 
 from . import constants as C
 from .appearance import Appearance, PEBBLES, appearance_for
+from .dialogue import DialogueState
+from .events import DialogueEvents
+from .lines import Lines
 from .temper import KillRitual, Temper
 from .arm import ArmChain
 from .behavior import BehaviourSelector, Wander
@@ -174,6 +177,10 @@ class SimulationState:
         # 用来把"仿真 px/tick"换成"屏幕 px/s"——四档尺寸下到闸时间才一致。
         self.temper = Temper()
         self.kill = KillRitual()
+        # ---- 对话/事件（docs/PLAN-dialogue.md）：纯数据，绘制在 platform 层 ----
+        self.lines = Lines(seed=seed)
+        self.dialogue = DialogueState()
+        self.events = DialogueEvents()
         self.scale = 1.5
         self._drag_prev_point: tuple[float, float] | None = None
         # 松手后的"甩"：自己积分一小段，不依赖 wander 的贝塞尔（那条路会把目标夹回臂展内）
@@ -487,6 +494,8 @@ class SimulationState:
         if self.drag_cooldown > 0:
             self.drag_cooldown -= 1
         self.time = self.ticks / C.GAME_HZ
+        # 对话推进放在仪式早退**之前**：仪式期间气泡照样收尾，但事件本身被抑制
+        self._step_dialogue()
 
         # ---- 杀鼠标仪式：最高优先级，整块早退 -------------------------------
         # 三件必须做的事（审计 P0-2）：身体照常积分、饰物/臂照常更新、**快照照常刷新**。
@@ -898,6 +907,35 @@ class SimulationState:
         self.cursor = pos
 
     # -- diagnostics -------------------------------------------------------
+    # ---- 对话 / 事件（docs/PLAN-dialogue.md）------------------------------
+    def _step_dialogue(self) -> None:
+        """每 tick：热重载检查 → 事件 → 抽池 → 推进显示。"""
+        self.lines.tick()
+        fired = self.events.tick(self.behaviour, self.dragging, self.kill.active)
+        if fired:
+            line = self.lines.next_line(self.appearance.key, fired)
+            if line:
+                self.dialogue.start(line)
+        self.dialogue.step()
+
+    def cancel_dialogue(self) -> None:
+        """硬收起 + 清事件冷却（暂停 / 换角色时调，审计 A2/A3）。"""
+        self.dialogue.cancel()
+        self.events.reset()
+
+    def dialogue_view(self) -> dict | None:
+        """给渲染层的气泡数据。``anchor`` 是**仿真 px**，转换在绘制前做一次（审计 A1）。"""
+        if not self.dialogue.text:
+            return None
+        # tile 必须用缆线插口自己那个（轨道矩形高/28），不是腔室高/28
+        socket = self.cord.socket
+        return {
+            "text": self.dialogue.visible_text(),
+            "size_fac": float(self.dialogue.size_fac),
+            "anchor": (socket[0],
+                       socket[1] - C.DIALOGUE_ANCHOR_TILES_UP * self.cord.tile),
+        }
+
     def status(self) -> dict:
         """Everything a human needs to see why the pet is doing what it is doing.
 
@@ -920,6 +958,9 @@ class SimulationState:
         )
         return {
             "ticks": self.ticks,
+            "character": self.appearance.key,
+            "dialogue": self.dialogue.to_dict(),
+            "dialogue_events": self.events.to_dict(),
             "time": round(self.time, 2),
             "behaviour": self.behaviour,
             "drag": self.drag_mode,

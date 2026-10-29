@@ -68,6 +68,7 @@ class PetWindow(PetCanvas):
             sprites=sprites,
         )
         self.config = config
+        self.dialogue_enabled = bool(getattr(config, 'dialogue_enabled', True))
         self.click_through = bool(config.click_through)
         self._paused = False
         self._press_global = None
@@ -305,6 +306,7 @@ class PetWindow(PetCanvas):
         if not self._paused:
             self.simulation.end_drag(fling=False)   # 进入暂停：结束拖拽（暂停不消费 drag_point）
             self.simulation.kill.cancel()           # 暂停时取消仪式，否则白闪会冻在屏幕上
+            self.simulation.cancel_dialogue()       # 暂停时收起气泡（审计 A2：tick 不动会冻在半截）
         cursorfx.release()
         self._paused = not self._paused
         if self._paused:
@@ -328,6 +330,16 @@ class PetWindow(PetCanvas):
     def spark_rate(self) -> str:
         return getattr(self.config, "spark_rate", "eco")
 
+    # -- dialogue -----------------------------------------------------------
+    def set_dialogue_enabled(self, enabled: bool) -> None:
+        """托盘「对话」开关。关掉立刻收起当前这句。"""
+        self.dialogue_enabled = bool(enabled)
+        self.config.dialogue_enabled = bool(enabled)
+        if not enabled:
+            self.simulation.cancel_dialogue()
+        self.update()
+        save(self.config)
+
     # -- character ----------------------------------------------------------
     @property
     def character(self) -> str:
@@ -345,6 +357,7 @@ class PetWindow(PetCanvas):
             return
         self.simulation.end_drag(fling=False)
         self.simulation.kill.cancel()
+        self.simulation.cancel_dialogue()        # 换角色不许串台词（审计 A3）
         self.config.character = key
         self.simulation.appearance = CHARACTERS[key]
         self.update()
@@ -438,6 +451,14 @@ class PetWindow(PetCanvas):
                 lambda _checked=False, name=key: self.set_character(name)
             )
             character_menu.addAction(action_character)
+
+        action_dialogue = QAction("对话", menu)
+        action_dialogue.setCheckable(True)
+        action_dialogue.setChecked(bool(self.dialogue_enabled))
+        action_dialogue.triggered.connect(
+            lambda checked: self.set_dialogue_enabled(bool(checked))
+        )
+        menu.addAction(action_dialogue)
 
         menu.addSeparator()
         action_quit = QAction("退出", menu)

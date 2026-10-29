@@ -1,0 +1,197 @@
+"""对话池 / 对话状态 / 两个事件的纯数据测试（不碰 Qt，跑得飞快）。
+
+对应 docs/PLAN-dialogue.md 的 M3/M4 验收：
+* 四组默认台词必须逐字等于用户 2026-10-29 给的原话；
+* 文件缺失自动重建、坏 JSON 保留旧表、热重载能读到玩家新加的条目；
+* 哨兵「（不触发对话）」= 这次不说话；池长 > 1 时不连续重复；
+* `drag` 在**开始**时触发、同一次拖拽一次、8 s 冷却；`talk` 进入 hablar 段触发、60 s 冷却；
+* 仪式（挣脱/杀鼠标）期间两个事件都不触发。
+"""
+
+from __future__ import annotations
+
+import json
+
+from iterator_pet.simulation import constants as C
+from iterator_pet.simulation.dialogue import DialogueState
+from iterator_pet.simulation.events import DialogueEvents
+from iterator_pet.simulation.lines import Lines
+
+
+def _lines(tmp_path, payload: dict | None = None, seed: int = 5) -> Lines:
+    return Lines(path=tmp_path / "lines.json", payload=payload, seed=seed)
+
+
+# --------------------------------------------------------------------------
+# 默认台词：必须逐字等于用户给的原话
+# --------------------------------------------------------------------------
+def test_default_pools_are_exactly_what_the_user_asked_for():
+    groups = C.DEFAULT_LINES["characters"]
+    assert groups["pebbles"]["drag"] == ["滚开。", "别烦我。", "（不触发对话）"]
+    assert groups["past_moon"]["drag"] == ["怎么了？", "请不要打扰我。", "（不触发对话）"]
+    assert groups["pebbles"]["talk"] == ["……"]
+    assert groups["past_moon"]["talk"] == ["你还在这里吗？"]
+
+
+def test_missing_file_is_created_with_defaults(tmp_path):
+    path = tmp_path / "lines.json"
+    lines = Lines(path=path)
+    assert path.is_file(), "第一次运行必须把默认池写到磁盘，玩家才能编辑"
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["characters"]["past_moon"]["talk"] == ["你还在这里吗？"]
+    assert lines.next_line("pebbles", "talk") == "……"
+
+
+def test_broken_json_keeps_the_previous_table(tmp_path):
+    path = tmp_path / "lines.json"
+    lines = Lines(path=path)
+    assert lines.pool("pebbles", "drag")
+    path.write_text("{ 这不是 JSON", encoding="utf-8")
+    assert lines.reload(force=True) is False
+    assert lines.pool("pebbles", "drag") == ["滚开。", "别烦我。", "（不触发对话）"]
+
+
+def test_player_can_add_lines_and_hot_reload_picks_them_up(tmp_path):
+    path = tmp_path / "lines.json"
+    lines = Lines(path=path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["characters"]["past_moon"]["talk"].append("我还在。")
+    data["characters"]["past_moon"]["talk"].remove("你还在这里吗？")
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    assert lines.reload(force=True) is True
+    assert lines.next_line("past_moon", "talk") == "我还在。"
+
+
+def test_silent_entry_and_empty_string_mean_no_dialogue(tmp_path):
+    payload = {"characters": {"pebbles": {"drag": ["（不触发对话）", "   "]}}}
+    lines = Lines(path=tmp_path / "lines.json", payload=payload)
+    assert lines.next_line("pebbles", "drag") is None
+    assert lines.next_line("pebbles", "drag") is None
+
+
+def test_pool_does_not_repeat_the_same_line_twice_in_a_row(tmp_path):
+    payload = {"characters": {"pebbles": {"drag": ["甲", "乙"]}}}
+    lines = Lines(path=tmp_path / "lines.json", payload=payload, seed=1)
+    picks = [lines.next_line("pebbles", "drag") for _ in range(40)]
+    assert all(a != b for a, b in zip(picks, picks[1:])), "不能连续两次说同一句"
+
+
+# --------------------------------------------------------------------------
+# 对话状态：逐字 → 停留 → 收起
+# --------------------------------------------------------------------------
+def test_dialogue_types_holds_then_closes():
+    line = "你还在这里吗？"
+    d = DialogueState()
+    assert d.start(line) is True
+    assert d.active and d.visible_text() == "你"
+
+    for _ in range(int(C.DIALOGUE_TYPE_TICKS_PER_CHAR) * (len(line) - 1)):
+        d.step()
+    assert d.typing_done(), f"应当打完了，实际 {d.visible_text()!r}"
+    assert d.visible_text() == line
+
+    hold = int(C.DIALOGUE_HOLD_BASE + C.DIALOGUE_HOLD_PER_CHAR * len(line))
+    for _ in range(hold + 40):
+        d.step()
+    assert not d.active, "停留结束后应当彻底收起"
+    assert d.text == ""
+
+
+def test_cancel_hides_immediately():
+    d = DialogueState()
+    d.start("滚开。")
+    d.step()
+    d.cancel()
+    assert not d.active and d.size_fac == 0.0 and d.text == ""
+
+
+def test_start_with_none_or_empty_is_a_noop():
+    d = DialogueState()
+    assert d.start(None) is False
+    assert d.start("") is False
+    assert not d.active
+
+
+# --------------------------------------------------------------------------
+# 两个事件
+# --------------------------------------------------------------------------
+def test_drag_fires_once_per_drag_and_has_an_eight_second_cooldown():
+    e = DialogueEvents()
+    assert e.tick("roaming", False) is None
+    assert e.tick("roaming", True) == "drag", "抓起的那一刻就该说"
+    assert e.tick("roaming", True) is None, "同一次拖拽只触发一次"
+    e.tick("roaming", False)                       # 松手
+    assert e.tick("roaming", True) is None, "8 s 冷却内再抓不说"
+    for _ in range(C.DIALOGUE_DRAG_COOLDOWN):
+        e.tick("roaming", False)
+    assert e.tick("roaming", True) == "drag"
+
+
+def test_talk_fires_on_entering_talk_and_respects_the_sixty_second_cooldown():
+    e = DialogueEvents()
+    assert e.tick("roaming", False) is None
+    assert e.tick("talk", False) == "talk", "进入 talk 段的第一 tick"
+    assert e.tick("talk", False) is None, "同一段只说一次"
+    e.tick("roaming", False)
+    assert e.tick("talk", False) is None, "60 s 冷却里不再说"
+    for _ in range(C.TALK_COOLDOWN_TICKS):
+        e.tick("roaming", False)
+    assert e.tick("talk", False) == "talk"
+
+
+def test_ritual_suppresses_both_events():
+    e = DialogueEvents()
+    assert e.tick("roaming", True, ritual_active=True) is None
+    assert e.tick("talk", True, ritual_active=True) is None
+
+
+def test_reset_clears_cooldowns_so_a_new_character_can_speak():
+    e = DialogueEvents()
+    assert e.tick("roaming", True) == "drag"
+    e.reset()
+    e.tick("roaming", False)
+    assert e.tick("roaming", True) == "drag", "换角色后不能继承旧冷却"
+
+
+# --------------------------------------------------------------------------
+# 接线：仿真层里的锚点与"事件 → 台词"
+# --------------------------------------------------------------------------
+def test_bubble_anchor_is_two_tiles_above_the_cord_socket():
+    from iterator_pet.simulation.state import SimulationState
+
+    for scale in (0.6, 1.5, 2.25):
+        bounds = (0.0, 0.0, 1707.0 / scale, 912.0 / scale)
+        sim = SimulationState(bounds, warmup=0)
+        sim.dialogue.start("你还在这里吗？")
+        sim.step(0.025)
+        view = sim.dialogue_view()
+        assert view is not None
+        socket, tile = sim.cord.socket, sim.cord.tile
+        assert abs(view["anchor"][0] - socket[0]) < 1e-9
+        assert abs(view["anchor"][1] - (socket[1] - C.DIALOGUE_ANCHOR_TILES_UP * tile)) < 1e-9
+        # 屏幕空间里应当落在下方（用户要的"屏幕正中下方"）
+        assert view["anchor"][1] * scale > 0.85 * 912.0, (scale, view["anchor"])
+
+
+def test_dragging_makes_the_pet_say_its_drag_line(tmp_path):
+    from iterator_pet.simulation.state import SimulationState
+
+    payload = {"characters": {"pebbles": {"drag": ["滚开。"], "talk": ["……"]}}}
+    sim = SimulationState((0.0, 0.0, 1138.0, 608.0), warmup=0)
+    sim.lines = Lines(path=tmp_path / "lines.json", payload=payload)
+    sim.set_cursor((300.0, 300.0))
+    assert sim.begin_drag("body", sim.creature.chunk0) is True
+    sim.step(0.025)
+    assert sim.dialogue.text == "滚开。", "抓起的那一 tick 就该触发 drag 台词"
+
+
+def test_entering_talk_makes_the_pet_say_its_talk_line(tmp_path):
+    from iterator_pet.simulation.state import SimulationState
+
+    payload = {"characters": {"past_moon": {"drag": ["怎么了？"], "talk": ["你还在这里吗？"]}}}
+    sim = SimulationState((0.0, 0.0, 1138.0, 608.0), warmup=0, character="past_moon")
+    sim.lines = Lines(path=tmp_path / "lines.json", payload=payload)
+    sim.set_cursor((300.0, 300.0))
+    sim.behaviour = "talk"
+    sim.step(0.025)
+    assert sim.dialogue.text == "你还在这里吗？"

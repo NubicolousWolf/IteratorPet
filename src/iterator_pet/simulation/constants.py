@@ -639,3 +639,42 @@ KILL_GLOW_ALPHA_GAIN = 5.0         # alpha = f^3 * GAIN（用户看两轮：第�
 KILL_RETREAT_TALK_RATIO = 1.5      # 挣脱后离光标 1.5 × TALK_DISTANCE
 KILL_RETREAT_SPEED = 12.0          # 仿真 px/tick，退得干脆但不瞬移
 KILL_STAND_TICKS = 20              # 站定后再开始蓄能（"站稳了再动手"）
+
+# ---------------------------------------------------------------- 对话/事件 ----
+DIALOGUE_FONT_PX = 20.0
+DIALOGUE_LINE_SPACING = 1.35
+DIALOGUE_MAX_LINES = 3
+DIALOGUE_MAX_CHARS = 40.0            # 宽度上限（以"40 个汉字"折算）
+DIALOGUE_MAX_WIDTH_RATIO = 0.55      # 同时不超过腔室宽的 55%
+DIALOGUE_ANCHOR_TILES_UP = 2.0       # og.cs 的 tile = 腔室高/28（见缆线插口换算）
+DIALOGUE_PAD_X = 14.0                # 内边距（屏幕 px）
+DIALOGUE_PAD_Y = 10.0
+DIALOGUE_CORNER = 7.0                # UIroundedCorner 是 7x7（HUD.DialogBox 实测）
+DIALOGUE_BORDER = 2.0                # DialogBox 的 pixel 条 scaleX/scaleY = 2
+DIALOGUE_BORDER_COLOR = (255, 255, 255)   # 用户 2026-10-29：固定白色，不随角色变
+DIALOGUE_BORDER_ALPHA = 0.9
+DIALOGUE_BG = (20, 16, 20)           # 深色半透明
+DIALOGUE_BG_ALPHA = 0.82
+DIALOGUE_TEXT = (242, 238, 242)
+DIALOGUE_FADE_TICKS = 6              # sizeFac 每帧逼近 1/6 -> 6 帧弹出（照 HUD.DialogBox.Update）
+DIALOGUE_HOLD_BASE = 60              # 说完停多久（tick）
+DIALOGUE_HOLD_PER_CHAR = 2.0
+DIALOGUE_TYPE_TICKS_PER_CHAR = 2     # 逐字：每 2 tick 出一个字（20 字/秒）
+DIALOGUE_DRAG_COOLDOWN = 320         # 8 s（用户拍板）
+DIALOGUE_RELOAD_TICKS = 80           # 热重载：每 2 s 查一次 mtime
+DIALOGUE_SILENT_ENTRY = "（不触发对话）"
+
+# 默认对话池（可在 lines.json 里自行增删）
+DEFAULT_LINES = {
+    "version": 1,
+    "characters": {
+        "pebbles": {
+            "drag": ["滚开。", "别烦我。", "（不触发对话）"],
+            "talk": ["……"],
+        },
+        "past_moon": {
+            "drag": ["怎么了？", "请不要打扰我。", "（不触发对话）"],
+            "talk": ["你还在这里吗？"],
+        },
+    },
+}
