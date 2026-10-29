@@ -1,16 +1,8 @@
-feat(kill): K1 白光聚拢 + 20 颗 spark + 挣脱段（视觉层面）
+feat(kill): K2 光环/电光在仪式期间变亮（不做台词）
 
-- rendering: draw_kill() 画在最后（对应 og.cs 的 Shortcuts 容器）：径向白光
-  alpha = f^3 * 5.0（用户两轮反馈：太暗，先 x2.5 再翻两倍），半径用腔室对角线
-  （Lerp(1.05*对角线, 8, sqrt(f))，仿真像素）；flash 段是**径向**白闪（审计：整屏白矩形太刺眼）
-  + 20 颗白 spark（照 ss.cs:2794-2797 的参数）
-- 挣脱段（用户要求）：触发时朝背离光标方向退到 1.5 x TALK_DISTANCE（=114 仿真 px），
-  把两个身体块摆成竖直（chunk1 = chunk0 + (0,9)），站定 20 tick 后才开始蓄能
-- 蓄能追着光标：锁定点每 tick 跟着光标走（"挣脱之后就一定杀到"），只有光标**离开屏幕**
-  累计 40 tick 才按 x0.8 衰减并 abort（源码的条件是"玩家不在房间"，桌面版的房间就是屏幕）
-- 蓄能速率 0.025 -> 0.0125（1 s -> 2 s，用户说太快；这是**有意偏离源码**，PLAN-kill §6 已记）
-- 冷却期不再禁止拖拽（用户：只有动画期间拖不动），冷却只阻止再次触发
-- RenderState 增 kill_fac/kill_anchor/kill_phase/kill_sparks/kill_flash，并在 lerp 里跟进
-  （sparks 不插值：长度会变）
-
-tests/test_kill.py 14 项全绿（新增：挣脱到 114 px 且竖直、蓄能期乱跑也照样杀到）。
+用户 2026-10-29 拍板：K2 只做"变亮"，台词不做（对话系统和美术资源都还没有）。
+- RenderState 新增 halo_gain（默认 1.0），并在 lerp 里跟进
+- _compose：杀鼠标期间 halo_white 抬到 boost*0.85、halo_gain = 1 + 0.7*boost
+  （warning 0.25 起步 -> 蓄能随 kill_fac 升到 1.0 -> flash 顶格）
+- renderer：环/bit/电光的基色乘 gain（白闪时整圈发白）
+- tests/test_kill.py 新增"仪式期间变亮、结束后回原值"，15 项全绿

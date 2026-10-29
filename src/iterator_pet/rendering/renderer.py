@@ -127,6 +127,7 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
     expand = state.halo_expand
     push = state.halo_push
     white = state.halo_white
+    gain = max(1.0, state.halo_gain)
 
     painter.save()
     painter.setPen(Qt.PenStyle.NoPen)
@@ -134,7 +135,9 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
     # 内暗外亮的径向渐变：源码里这层亮度差来自那盏 400 px 的灯，桌面端直接画出来。
     # 环用一个"到环 0 半径就收尾"的渐变（这样白闪填盘时外缘最亮），
     # bit 用延伸到最外圈 bit 半径的那个。
-    base = QColor(*C.HALO_COLOUR)
+    base = QColor(min(255, int(C.HALO_COLOUR[0] * gain)),
+                  min(255, int(C.HALO_COLOUR[1] * gain)),
+                  min(255, int(C.HALO_COLOUR[2] * gain)))
 
     def _gradient(outer: float, dim: float) -> QBrush:
         grad = QRadialGradient(QPointF(cx, cy), max(1.0, outer))
@@ -160,7 +163,9 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
     #      · 端点落在最外圈 bit 的外缘，真正"接上"光环
     # 端点接**内圈环**（ring 0）：电光画在最底层，被环和 bit 盖住，视觉上就是"扎进光环里"。
     spark_radius = (C.HALO_RADIUS_BASE + push) * expand * 10.0 + 1.0
-    spark_base = QColor(*C.HALO_COLOUR)
+    spark_base = QColor(min(255, int(C.HALO_COLOUR[0] * gain)),
+                        min(255, int(C.HALO_COLOUR[1] * gain)),
+                        min(255, int(C.HALO_COLOUR[2] * gain)))
     spark_colour = QColor(
         min(255, int(spark_base.red() * 1.05)),
         min(255, int(spark_base.green() * 1.05)),

@@ -216,3 +216,30 @@ def test_charging_chases_the_cursor_and_cannot_be_dodged():
         sim.set_cursor((base[0] - 200.0 + (i % 20) * 30.0, base[1] + (i % 7) * 20.0))
         sim.step(GAME_DT)
     assert sim.kill.phase in ("flash", "cooldown"), "光标乱跑也必须蓄满并进 flash"
+
+
+def test_halo_brightens_during_the_ritual():
+    """K2（用户 2026-10-29）：杀鼠标期间光环/电光要变亮，结束后回到原亮度。"""
+    sim = _sim()
+    before = sim._cur.halo_gain
+    assert abs(before - 1.0) < 0.02
+    sim.temper.value = C.TEMPER_KILL_GATE - 0.01
+    guard = 0
+    while sim.kill.phase != "charging" and guard < 200:
+        guard += 1
+        sim.step(GAME_DT)
+    during = sim._cur.halo_gain
+    assert during > 1.1, f"蓄能期光环应当变亮，实测 gain={during:.3f}"
+    assert sim._cur.halo_white > 0.1
+    # 推到 flash：顶格
+    guard = 0
+    while sim.kill.phase != "flash" and guard < 200:
+        guard += 1
+        sim.step(GAME_DT)
+    assert sim._cur.halo_gain > 1.5
+    # 冷却/结束
+    guard = 0
+    while sim.kill.phase != "idle" and guard < 800:
+        guard += 1
+        sim.step(GAME_DT)
+    assert abs(sim._cur.halo_gain - 1.0) < 0.02, "仪式结束后光环亮度要回原值"

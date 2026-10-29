@@ -70,6 +70,7 @@ class RenderState:
     # 墙前看不出问题；桌面上屏幕外什么都没有，被窗口裁掉就是硬切口）。肘点**不**夹：
     # 2026-10-27 的翻肘护栏会让肘点单 tick 跳 ~196 px，已整个拆掉。
     bounds: tuple[float, float, float, float] | None = None
+    halo_gain: float = 1.0          # 光环/电光的整体亮度倍率（杀鼠标时变亮）
     # ---- "杀鼠标"仪式（docs/PLAN-kill.md）。全部是渲染需要的原始标量 ----
     # kill_fac 走插值（白光半径/alpha 都是它的函数）；anchor/phase 直接取最新快照；
     # sparks **不插值**（长度会变，mix_list 在长度不等时返回旧列表 → 会闪）。
@@ -119,6 +120,7 @@ class RenderState:
             halo_expand=mix_scalar(self.halo_expand, other.halo_expand, alpha),
             halo_push=mix_scalar(self.halo_push, other.halo_push, alpha),
             halo_white=mix_scalar(self.halo_white, other.halo_white, alpha),
+            halo_gain=mix_scalar(self.halo_gain, other.halo_gain, alpha),
             halo_rot=[mix_scalar(a, b, alpha) for a, b in zip(self.halo_rot, other.halo_rot)],
             halo_fill=[mix_scalar(a, b, alpha) for a, b in zip(self.halo_fill, other.halo_fill)],
             halo_sparks=[
@@ -371,6 +373,19 @@ class SimulationState:
         c.head = (c.head[0] + delta[0], c.head[1] + delta[1])
         c.hands = [(h[0] + delta[0], h[1] + delta[1]) for h in c.hands]
         c.feet = [(f[0] + delta[0], f[1] + delta[1]) for f in c.feet]
+
+    def _kill_glow_boost(self) -> float:
+        """杀鼠标期间光环/电光要"变亮"（用户 2026-10-29：K2 只做变亮，不做台词）。
+
+        warning 段 0.25 起步，蓄能随 kill_fac 升到 1.0，flash 段顶格。
+        """
+        if not self.kill.active:
+            return 0.0
+        if self.kill.phase == "flash":
+            return 1.0
+        if self.kill.phase == "warning":
+            return 0.25
+        return 0.25 + 0.75 * min(1.0, self.kill.kill_fac)
 
     def _tick_kill(self) -> None:
         """仪式的一 tick：推进状态机、让身体原地站住、照常更新饰物与快照。
@@ -845,7 +860,8 @@ class SimulationState:
             halo_center=center,
             halo_expand=self.halo.expand,
             halo_push=self.halo.push,
-            halo_white=self.halo.white,
+            halo_white=max(self.halo.white, self._kill_glow_boost() * 0.85),
+            halo_gain=1.0 + 0.7 * self._kill_glow_boost(),
             halo_rot=[self.halo.rotation(r) for r in range(self.halo.ROWS)],
             halo_fill=self.halo.bit_fills(),
             halo_sparks=[
