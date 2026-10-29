@@ -88,6 +88,8 @@ class PetWindow(PetCanvas):
         self._origin = (float(geo.x()), float(geo.y()))
         self.setGeometry(geo)
         zoom = max(0.3, min(4.0, float(config.scale)))
+        # 心情的"屏幕速度"要有 scale 才能算（仿真 px/tick → 屏幕 px/s）
+        self.simulation.scale = zoom
         self.simulation.resize(
             (0.0, 0.0, float(geo.width()) / zoom, float(geo.height()) / zoom)
         )
@@ -113,7 +115,8 @@ class PetWindow(PetCanvas):
             windows_overlay.set_click_through(self, True)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        self.simulation.end_drag()
+        self.simulation.end_drag(fling=False)
+        self.simulation.kill.cancel()
         self._timer.stop()
         # NO save() HERE. Every mutator (toggle_click_through / toggle_rail)
         # already persists, so closing wrote nothing new -- but a TOOL
@@ -259,20 +262,25 @@ class PetWindow(PetCanvas):
         self.scale = zoom
         geo = self.geometry()
         bounds = (0.0, 0.0, float(geo.width()) / zoom, float(geo.height()) / zoom)
-        self.simulation.end_drag()          # 拖拽中切尺寸：先结束旧会话
+        self.simulation.end_drag(fling=False)   # 拖拽中切尺寸：先结束旧会话（不甩）
+        carried_temper = self.simulation.temper.value
         seed = getattr(self.simulation, "seed", 1234)
         # **不能带预热同步构造**：构造里的 320 tick 预热随腔室面积膨胀得非常厉害
         # （1138x608 约 1.6 s，40% 档的 2845x1520 要 11.7 s —— 这就是"切尺寸卡一下"）。
         # warmup=0 只要 0.4 ms，之后让 40 TPS 的固定步长循环自然把关节/缆线跑稳，
         # 用户看到的是一秒左右"刚站住"的过渡，而不是整个界面冻住。
         self.simulation = SimulationState(bounds, seed=seed, warmup=0)
+        self.simulation.scale = zoom
+        # 心情跨尺寸保留（否则换一下大小就"消气"），仪式状态机复位（不许留半个仪式）
+        self.simulation.temper.value = carried_temper
         self._last = time.perf_counter()
         self.update()
 
     # -- controls ----------------------------------------------------------
     def toggle_pause(self) -> None:
         if not self._paused:
-            self.simulation.end_drag()      # 进入暂停：结束拖拽（暂停时不消费 drag_point）
+            self.simulation.end_drag(fling=False)   # 进入暂停：结束拖拽（暂停不消费 drag_point）
+            self.simulation.kill.cancel()           # 暂停时取消仪式，否则白闪会冻在屏幕上
         self._paused = not self._paused
         if self._paused:
             self._loop.pause()
@@ -296,7 +304,8 @@ class PetWindow(PetCanvas):
         return getattr(self.config, "spark_rate", "eco")
 
     def toggle_click_through(self) -> None:
-        self.simulation.end_drag()          # 穿透后就收不到事件了，先结束拖拽
+        self.simulation.end_drag(fling=False)
+        self.simulation.kill.cancel()          # 穿透后就收不到事件了，先结束拖拽
         self.click_through = not self.click_through
         self._apply_click_through()
         self.config.click_through = self.click_through

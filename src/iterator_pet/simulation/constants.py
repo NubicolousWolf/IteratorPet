@@ -603,3 +603,29 @@ FLING_DECAY = 0.85
 # P1 抓底座拖拽：直接操纵的限速（°/tick）。2° ≈ 18 px/tick ≈ 730 px/s（本机腔室
 # 每象限 821 px / 90°）。比常规漫游的 0.12/0.45 快得多，因为这是"手在拖"，不是滑车自己走。
 DRAG_BASE_DRAG_DEG = 2.0
+
+# ------------------------------------------------- 心情 / "杀鼠标"（设计增补）
+# 用户 2026-10-29 拍板：慢拖 20 s、快拖 10 s 从 0 掉到闸值；心情 30 s 回到 0；冷却 10 s。
+# 速度一律用**屏幕像素/秒**，四档尺寸（scale 0.6–2.25）下到闸时间才不会漂 2.1 倍。
+TEMPER_KILL_GATE = -0.55           # 破这个值就强制打断、进仪式
+TEMPER_DRAG_BASE = 0.0006875       # /tick，任何**真位移**的拖拽都扣（40 TPS → 0.0275/s，20 s 到闸）
+TEMPER_DRAG_SPEED_K = 0.0006875    # 满速时再扣这么多（合起来翻倍 → 10 s 到闸）
+TEMPER_SCREEN_SPEED_CAP = 720.0    # 屏幕 px/s，= 12 仿真 px/tick @ scale 1.5
+TEMPER_FLING_GAIN = 0.30           # 松手甩出时按末速再扣一点
+TEMPER_DECAY = 0.0004583           # /tick，0.55/(30*40) → 30 s 从闸值回到 0
+TEMPER_AFTER_KILL = -0.15          # 进仪式那一刻直接把心情消耗到这里（防无限重入）
+TEMPER_AFTER_ABORT = -0.30         # 蓄能失败（光标跑开）后抬到这里
+# 仪式本身（照 ss.cs:2790-2799 / og.cs:2096-2098）
+KILL_FAC_RATE = 0.025              # /tick → 40 tick 胀满（ss.cs:2790）
+KILL_FAC_DECAY = 0.8               # 光标跑开时 (ss.cs:2803)
+KILL_WARNING_TICKS = 40            # 设计增补：源码进段即蓄能，没有停顿段
+KILL_FLASH_TICKS = 6               # 白闪时长（不是源码的死亡演出）
+KILL_COOLDOWN_TICKS = 400          # 10 s
+KILL_ABORT_COOLDOWN = 200          # 蓄能失败后 5 s 内不重入
+KILL_LOCK_SCREEN_PX = 260.0        # 光标离锚点多远算"跑开"
+KILL_SPARK_COUNT = 20              # ss.cs:2794
+KILL_SPARK_SPEED_MAX = 40.0        # ss.cs
+KILL_SPARK_LIFE = (30, 120)        # ss.cs
+KILL_GLOW_START_SCALE = 200.0      # og.cs:2097 scale = Lerp(200, 2, sqrt(f))
+KILL_GLOW_END_SCALE = 2.0
+KILL_FLASH_ALPHA = 0.5             # 审计建议：0.85 全屏太刺眼

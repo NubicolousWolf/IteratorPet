@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from math import atan2, cos, degrees, hypot, radians, sin
 
 from . import constants as C
+from .temper import KillRitual, Temper
 from .arm import ArmChain
 from .behavior import BehaviourSelector, Wander
 from .cord import Cord
@@ -148,6 +149,12 @@ class SimulationState:
         self.drag_cooldown: int = 0
         # 最近几个 tick 的拖拽点，松手时用来算"甩"的方向与速度
         self._drag_samples: list[tuple[int, tuple[float, float]]] = []
+        # 心情与"杀鼠标"仪式（docs/PLAN-kill.md）。scale 由 PetWindow 注入，
+        # 用来把"仿真 px/tick"换成"屏幕 px/s"——四档尺寸下到闸时间才一致。
+        self.temper = Temper()
+        self.kill = KillRitual()
+        self.scale = 1.5
+        self._drag_prev_point: tuple[float, float] | None = None
         # 松手后的"甩"：自己积分一小段，不依赖 wander 的贝塞尔（那条路会把目标夹回臂展内）
         self.fling_vel: tuple[float, float] = (0.0, 0.0)
         self.fling_ticks: int = 0
@@ -263,6 +270,10 @@ class SimulationState:
         """
         if self.drag_cooldown > 0:
             return False
+        # 仪式与冷却期内不许拖拽（他真要动手的时候你拽不动他）；锁用**独立字段**，
+        # 不能复用 drag_cooldown —— 那条被 tests/test_drag.py 钉死在 13 tick 后必须能再抓。
+        if self.kill.blocked:
+            return False
         self.drag_mode = mode
         self.drag_point = point
         if point is not None:
@@ -281,7 +292,7 @@ class SimulationState:
             if len(self._drag_samples) > 5:
                 del self._drag_samples[0]
 
-    def end_drag(self) -> None:
+    def end_drag(self, fling: bool = True) -> None:
         if self.drag_mode is None:
             return
         self.drag_mode = None
@@ -293,7 +304,7 @@ class SimulationState:
         chunk0 = self.creature.chunk0
         self.fling_vel = (0.0, 0.0)
         self.fling_ticks = 0
-        if len(self._drag_samples) >= 2:
+        if fling and len(self._drag_samples) >= 2:
             first_tick, first_point = self._drag_samples[0]
             last_tick, last_point = self._drag_samples[-1]
             spans = max(1, last_tick - first_tick)
@@ -305,6 +316,8 @@ class SimulationState:
                 scale = min(1.0, cap / speed) * C.FLING_GAIN
                 self.fling_vel = (vx * scale, vy * scale)
                 self.fling_ticks = C.FLING_TICKS
+                # 甩出去也算"被他记一笔"：按屏幕 px/s 加一点心情惩罚
+                self.temper.drain_fling(speed * self.scale * C.GAME_HZ)
         self._drag_samples.clear()
         self.wander.current = chunk0
         self.wander.next = chunk0
@@ -345,6 +358,38 @@ class SimulationState:
         c.head = (c.head[0] + delta[0], c.head[1] + delta[1])
         c.hands = [(h[0] + delta[0], h[1] + delta[1]) for h in c.hands]
         c.feet = [(f[0] + delta[0], f[1] + delta[1]) for f in c.feet]
+
+    def _tick_kill(self) -> None:
+        """仪式的一 tick：推进状态机、让身体原地站住、照常更新饰物与快照。
+
+        ``ss.cs`` 里这段没有身体动作（他站着盯着你）；桌面版也让他站住，
+        但仍要跑 ``creature.step``（否则身体会冻在"刚被拖开的姿势"）与
+        ``_drag_base_and_ornaments``（底座/臂/缆线/袍/光环），最后刷新快照。
+        """
+        cursor = self.cursor
+        was_active = self.kill.active
+        event = self.kill.step(cursor, C.KILL_LOCK_SCREEN_PX / max(0.2, float(self.scale)))
+        if was_active and not self.kill.active and event is None:
+            # 蓄能失败（光标跑开）：把心情抬到 -0.30，并进入短冷却，避免下一 tick 立刻重入
+            self.temper.value = C.TEMPER_AFTER_ABORT
+        self.kill.tick_sparks()
+        if event == "flash":
+            self.temper.value = min(0.0, C.TEMPER_AFTER_KILL)
+        if self.kill.phase == "cooldown":
+            self.temper.tick(cooldown=True)
+        elif not self.kill.active:
+            self.temper.tick()
+        get_to = self.creature.chunk0
+        look_point = self.creature.head
+        self._apply_control_noop()
+        self.creature.step(get_to, self.creature.body_dir, look_point)
+        self._drag_base_and_ornaments()
+        self._prev = self._cur
+        self._cur = self._compose()
+
+    def _apply_control_noop(self) -> None:
+        """占位：保留调用点（旧 ``_apply_control`` 已经是空实现）。"""
+        return
 
     def _drag_base_and_ornaments(self) -> None:
         """拖拽分支的尾巴：底座跟随 + 机械臂 + 缆线/袍/光环（与正常路径同一套）。"""
@@ -390,6 +435,33 @@ class SimulationState:
         if self.drag_cooldown > 0:
             self.drag_cooldown -= 1
         self.time = self.ticks / C.GAME_HZ
+
+        # ---- 杀鼠标仪式：最高优先级，整块早退 -------------------------------
+        # 三件必须做的事（审计 P0-2）：身体照常积分、饰物/臂照常更新、**快照照常刷新**。
+        # 少最后一行，RenderState 永远不更新 → 白光定格在进入仪式的那一帧。
+        if self.kill.active:
+            self._tick_kill()
+            return
+
+        # ---- 心情：拖拽中按"真位移 + 屏幕速度"扣；破闸立刻强制打断 ----------
+        if self.dragging and self.drag_point is not None:
+            prev = self._drag_prev_point
+            self._drag_prev_point = self.drag_point
+            moved = prev is not None and C.dist(prev, self.drag_point) > 0.5
+            speed = 0.0 if prev is None else C.dist(prev, self.drag_point)
+            self.temper.drain_drag(speed * self.scale * C.GAME_HZ, moved)
+        else:
+            self._drag_prev_point = None
+        if self.temper.angry and not self.kill.blocked:
+            # 强制打断：清掉拖拽与还没执行的甩出（否则冷却结束后人偶会莫名弹一下）
+            self.end_drag(fling=False)
+            # 锚点：光标优先；光标不在屏上（None）就用拖拽点/头顶，
+            # 否则 anchor 为 None 时永远量不出"跑开"，abort 分支形同虚设（实测踩过）
+            anchor = self.cursor or self.drag_point or self.creature.head
+            self.kill.begin(anchor, self.ticks)
+            self.temper.value = C.TEMPER_AFTER_KILL
+            self._tick_kill()
+            return
 
         self._apply_control()
         pose_now = self.rail.pose(self.frame_pos)
@@ -626,6 +698,10 @@ class SimulationState:
         halo_center = self._halo_center()
         self.halo.step(halo_center, self.creature.body_dir, self.ticks)
 
+        # 冷却要在**正常路径**里走：仪式 active 时有专门的早退分支，
+        # 冷却期不走那条分支，否则 cooldown 永不递减 → 永久抓不住（实测踩过）
+        self.kill.tick_cooldown()
+        self.temper.tick(cooldown=self.kill.cooldown > 0)
         self._prev = self._cur
         self._cur = self._compose()
 
@@ -771,6 +847,9 @@ class SimulationState:
             "time": round(self.time, 2),
             "behaviour": self.behaviour,
             "drag": self.drag_mode,
+            "temper": round(self.temper.value, 4),
+            "kill": {"phase": self.kill.phase, "fac": round(self.kill.kill_fac, 4),
+                     "cooldown": self.kill.cooldown},
             # Draw weights: what the last/next draw was choosing between. This is
             # the "probability" the selector talks about -- an argmax has no such
             # thing, which is why the panel used to show a "best" that lost.

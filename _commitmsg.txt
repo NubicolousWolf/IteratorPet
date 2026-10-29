@@ -1,0 +1,13 @@
+feat(kill): K0 心情 + 杀鼠标仪式状态机（纯状态，无渲染）
+
+按 docs/PLAN-kill.md v2（已过蓝军审计的 6 个 P0）实现：
+- simulation/temper.py：Temper（-1..1；拖拽按"真位移 + 屏幕 px/s"扣、30 s 回中）
+  + KillRitual（warning 40t -> charging kill_fac += 0.025/tick -> flash 6t 产 20 颗白 spark -> cooldown 400t）
+- state：破闸立刻强制打断（end_drag(fling=False) 清甩出；kill.blocked 是独立锁，不复用 drag_cooldown）；
+  仪式分支早退仍跑 creature.step + _drag_base_and_ornaments + _prev/_cur = _compose()（防白光定格）；
+  abort 后 temper 抬到 -0.30 + 200 tick 短冷却（防无限重入）；status() 增 temper/kill 键
+- pet_window：注入 scale（四档尺寸到闸时间一致）、切尺寸搬心情值、暂停/关闭/开穿透取消仪式
+- tests/test_kill.py 12 项：慢拖 19.1 s / 快拖 10.0 s / 跨档一致 / 按住不动不掉 / 打断清 fling /
+  快照每 tick 刷新 / kill_fac 恰好 40 tick / 20 颗 spark / abort 不重入 / 冷却 400 tick
+
+95 passed。
