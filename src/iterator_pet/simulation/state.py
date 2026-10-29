@@ -70,6 +70,14 @@ class RenderState:
     # 墙前看不出问题；桌面上屏幕外什么都没有，被窗口裁掉就是硬切口）。肘点**不**夹：
     # 2026-10-27 的翻肘护栏会让肘点单 tick 跳 ~196 px，已整个拆掉。
     bounds: tuple[float, float, float, float] | None = None
+    # ---- "杀鼠标"仪式（docs/PLAN-kill.md）。全部是渲染需要的原始标量 ----
+    # kill_fac 走插值（白光半径/alpha 都是它的函数）；anchor/phase 直接取最新快照；
+    # sparks **不插值**（长度会变，mix_list 在长度不等时返回旧列表 → 会闪）。
+    kill_fac: float = 0.0
+    kill_anchor: tuple[float, float] | None = None
+    kill_phase: str = "idle"
+    kill_sparks: tuple = ()
+    kill_flash: float = 0.0
 
     def lerp(self, other: "RenderState", alpha: float) -> "RenderState":
         if alpha <= 0.0:
@@ -122,6 +130,11 @@ class RenderState:
             time=other.time,
             ticks=other.ticks,
             bounds=other.bounds,
+            kill_fac=mix_scalar(self.kill_fac, other.kill_fac, alpha),
+            kill_anchor=other.kill_anchor,
+            kill_phase=other.kill_phase,
+            kill_sparks=other.kill_sparks,     # 不插值：列表长度会变
+            kill_flash=mix_scalar(self.kill_flash, other.kill_flash, alpha),
         )
 
 
@@ -367,10 +380,28 @@ class SimulationState:
         ``_drag_base_and_ornaments``（底座/臂/缆线/袍/光环），最后刷新快照。
         """
         cursor = self.cursor
-        was_active = self.kill.active
+        # 警告段的人偶动作：朝"挣脱目标"走，到了就摆正站定（用户：立刻挣脱光标、退到
+        # 1.5 个 talk 距离、摆正位姿、站定后再白光聚拢）
+        if self.kill.phase == "warning" and self.kill.retreat is not None:
+            target = self.kill.retreat
+            gap = C.dist(self.creature.chunk0, target)
+            if gap > 2.0:
+                step = min(C.KILL_RETREAT_SPEED, gap)
+                direction = C.dir_vec(self.creature.chunk0, target)
+                self._translate_creature((direction[0] * step, direction[1] * step))
+                for attribute in ("vel0", "vel1", "head_vel"):
+                    setattr(self.creature, attribute, (0.0, 0.0))
+                self.creature.hand_vel = [(0.0, 0.0), (0.0, 0.0)]
+                self.creature.foot_vel = [(0.0, 0.0), (0.0, 0.0)]
+                self.kill._still = 0
+            else:
+                # 摆正：两个身体块竖直对齐（9 px 连杆），看起来是"站定"
+                self.creature.chunk0 = target
+                self.creature.chunk1 = (target[0], target[1] + 9.0)
+                self.kill._still += 1
         event = self.kill.step(cursor, C.KILL_LOCK_SCREEN_PX / max(0.2, float(self.scale)))
-        if was_active and not self.kill.active and event is None:
-            # 蓄能失败（光标跑开）：把心情抬到 -0.30，并进入短冷却，避免下一 tick 立刻重入
+        if event == "abort":
+            # 蓄能失败（光标跑开）：心情抬到 -0.30 并进短冷却，避免下一 tick 立刻重入
             self.temper.value = C.TEMPER_AFTER_ABORT
         self.kill.tick_sparks()
         if event == "flash":
@@ -452,13 +483,28 @@ class SimulationState:
             self.temper.drain_drag(speed * self.scale * C.GAME_HZ, moved)
         else:
             self._drag_prev_point = None
-        if self.temper.angry and not self.kill.blocked:
+        # 冷却（400 tick / abort 200 tick）只阻止**再次触发**，不阻止拖拽 ——
+        # 所以这里必须显式查 cooldown，不能只看 kill.blocked（后者只管"动画期间"）
+        if self.temper.angry and not self.kill.active and self.kill.cooldown <= 0:
             # 强制打断：清掉拖拽与还没执行的甩出（否则冷却结束后人偶会莫名弹一下）
             self.end_drag(fling=False)
             # 锚点：光标优先；光标不在屏上（None）就用拖拽点/头顶，
             # 否则 anchor 为 None 时永远量不出"跑开"，abort 分支形同虚设（实测踩过）
             anchor = self.cursor or self.drag_point or self.creature.head
             self.kill.begin(anchor, self.ticks)
+            # 挣脱目标：从人偶**背离光标**方向退 1.5 个 talk 身位（用户 2026-10-29 要求），
+            # 再夹进腔室和臂展（否则退到屏幕外/臂展外）
+            # 方向：从光标指向人偶（保持"在光标外侧"的站位），距离 = 1.5 个 talk 身位。
+            # 是"退/进到 114 px"，不是"再远离 114 px"——用户说的是"移动到距离光标
+            # 1.5 倍 talk 距离"（实测按后者会变成 414 px，人偶跑到屏幕另一头）。
+            away = C.dir_vec(anchor, self.creature.chunk0)
+            if away == (0.0, 0.0):
+                away = (0.0, -1.0)
+            reach = C.TALK_DISTANCE * C.KILL_RETREAT_TALK_RATIO
+            target = (anchor[0] + away[0] * reach, anchor[1] + away[1] * reach)
+            target = self._clamp_to_room(target)
+            target = self._reachable(self.rail.pose(self.frame_pos).point, target)
+            self.kill.retreat = target
             self.temper.value = C.TEMPER_AFTER_KILL
             self._tick_kill()
             return
@@ -805,6 +851,11 @@ class SimulationState:
             halo_sparks=[
                 (c.stuck_at, c.handle, c.light_up) for c in self.halo.connections
             ],
+            kill_fac=self.kill.kill_fac,
+            kill_anchor=self.kill.focus or self.kill.anchor,
+            kill_phase=self.kill.phase,
+            kill_sparks=tuple(tuple(s) for s in self.kill.sparks),
+            kill_flash=self.kill.flash_progress,
             cursor=self.cursor,
             behaviour=self.behaviour,
             time=self.time,

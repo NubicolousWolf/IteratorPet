@@ -960,6 +960,59 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
 # --------------------------------------------------------------------------
 # scene
 # --------------------------------------------------------------------------
+def draw_kill(painter: QPainter, state: RenderState) -> None:
+    """五块卵石的"杀鼠标"表现（docs/PLAN-kill.md §3.3）。
+
+    照 `og.cs:2096-2098`：`f = Lerp(lastKillFac, killFac, ts)`（我们的插值已经做了），
+    `scale = Lerp(200, 2, sqrt(f))`、`alpha = f**3`；位置在**光标**上（源码是玩家）。
+    半径用**腔室对角线**（仿真像素）而不是屏幕像素 —— `draw_scene` 已经 `painter.scale(scale)`，
+    用屏幕像素会让四档尺寸差 3.75 倍。
+    """
+    if state.kill_phase in ("idle", "cooldown") and state.kill_fac <= 0.001:
+        return
+    anchor = state.kill_anchor
+    if anchor is None:
+        return
+    bounds = state.bounds
+    diagonal = 1.0
+    if bounds is not None:
+        diagonal = max(1.0, (bounds[2] ** 2 + bounds[3] ** 2) ** 0.5)
+    f = max(0.0, min(1.0, state.kill_fac))
+    # Lerp(200, 2, sqrt(f)) 换算成"腔室对角线的倍数"：200 对应 1.05 个对角线，
+    # 2 对应 ~8 仿真 px（与 PLAN-kill §3.3 一致）
+    end_radius = 8.0
+    radius = (1.05 * diagonal) * (1.0 - f ** 0.5) + end_radius * f ** 0.5
+    # 用户 2026-10-29：太暗，至少两倍 → alpha = f^3 * GAIN（再夹 0.85 免得过曝）
+    alpha = min(0.85, (f ** 3) * C.KILL_GLOW_ALPHA_GAIN)
+    if alpha <= 0.002:
+        return
+    cx, cy = anchor
+    grad = QRadialGradient(QPointF(cx, cy), max(1.0, radius))
+    for stop, dim in ((0.0, 1.0), (0.55, 0.55), (1.0, 0.0)):
+        grad.setColorAt(stop, QColor(255, 255, 255, int(255 * C.KILL_FLASH_ALPHA * alpha * dim)))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(grad))
+    painter.drawEllipse(QPointF(cx, cy), radius, radius)
+
+    # 白闪：**径向**闪（不是整屏白矩形）。审计意见：整屏 0.85 alpha 会盖住用户正在看的一切；
+    # 这里从光标向外扩散一圈 0.75 对角线的白光，随 flash 进度 1→0 淡出。
+    if state.kill_flash > 0.001:
+        flash_r = 0.75 * diagonal
+        fgrad = QRadialGradient(QPointF(cx, cy), max(1.0, flash_r))
+        base_alpha = int(255 * C.KILL_FLASH_ALPHA * state.kill_flash)
+        for stop, dim in ((0.0, 1.0), (0.5, 0.45), (1.0, 0.0)):
+            fgrad.setColorAt(stop, QColor(255, 255, 255, int(base_alpha * dim)))
+        painter.setBrush(QBrush(fgrad))
+        painter.drawEllipse(QPointF(cx, cy), flash_r, flash_r)
+
+    # 20 颗白 spark（数据在仿真侧，长度会变所以不插值）
+    for spark in state.kill_sparks:
+        life = max(0.0, min(1.0, spark[4] / max(1.0, spark[5])))
+        painter.setBrush(QColor(255, 255, 255, int(255 * life)))
+        painter.drawEllipse(QPointF(spark[0], spark[1]), 1.6, 1.6)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+
 def draw_scene(
     painter: QPainter,
     state: RenderState,
@@ -985,5 +1038,7 @@ def draw_scene(
     draw_gown(painter, state)
     draw_puppet_hands(painter, state)
     draw_puppet_head(painter, state)
+    # "杀鼠标"的白光/白闪/spark 必须在**所有东西之上**（og.cs:2048 挂在 Shortcuts 容器）
+    draw_kill(painter, state)
 
     painter.restore()

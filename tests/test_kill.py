@@ -16,6 +16,9 @@ BOUNDS = (0.0, 0.0, 1138.0, 608.0)
 def _sim(scale: float = 1.5) -> SimulationState:
     sim = SimulationState(BOUNDS, warmup=0)      # warmup=0 只为跑得快；预热不影响心情逻辑
     sim.scale = scale
+    # 默认给一个屏上的光标：蓄能期间"光标为 None 累计 40 tick 就 abort"（真实场景里只有
+    # 鼠标移出屏幕才会这样），测试不该因为没设光标就莫名 abort
+    sim.set_cursor((sim.creature.chunk0[0] - 120.0, sim.creature.chunk0[1]))
     return sim
 
 
@@ -84,23 +87,26 @@ def test_ritual_refreshes_the_snapshot_every_tick():
         prev = sim._cur
 
 
-def test_kill_fac_ramps_in_exactly_forty_ticks():
+def test_kill_fac_ramps_in_eighty_ticks():
+    """用户 2026-10-29 反馈"太快"，蓄能放慢到 0.0125/tick = 80 tick（2 s）。"""
     sim = _sim()
-    sim.kill.begin(sim.cursor, sim.ticks)
-    for _ in range(C.KILL_WARNING_TICKS):
+    sim.kill.begin(sim.cursor or sim.creature.head, sim.ticks)
+    guard = 0
+    while sim.kill.phase == "warning" and guard < 200:
+        guard += 1
         sim.step(GAME_DT)
     assert sim.kill.phase == "charging"
     ticks = 0
-    while sim.kill.kill_fac < 1.0 and ticks < 60:
+    while sim.kill.kill_fac < 1.0 and ticks < 120:
         ticks += 1
         sim.step(GAME_DT)
-    assert ticks == 40, f"kill_fac 应当恰好 40 tick 胀满，实测 {ticks}"
+    assert ticks in (79, 80, 81), f"kill_fac 应当约 80 tick 胀满（2 s），实测 {ticks}"
 
 
 def test_flash_spawns_twenty_white_sparks():
     sim = _sim()
     sim.kill.begin(sim.cursor, sim.ticks)
-    for _ in range(C.KILL_WARNING_TICKS + 41):
+    for _ in range(C.KILL_WARNING_TICKS + C.KILL_STAND_TICKS + 81):
         sim.step(GAME_DT)
     sparks = sim.kill.sparks
     assert len(sparks) == C.KILL_SPARK_COUNT == 20
@@ -114,34 +120,51 @@ def test_abort_does_not_reenter_immediately():
     """蓄能时跑开 → abort；之后不许马上重入（审计 P0-1 的死循环）。"""
     sim = _sim()
     _drag_until_gate(sim, 12.0)                 # 进 warning
-    for _ in range(C.KILL_WARNING_TICKS + 5):
+    guard = 0
+    while sim.kill.phase != "charging" and guard < 200:
+        guard += 1
         sim.step(GAME_DT)
     assert sim.kill.phase == "charging"
-    far = (sim.creature.chunk0[0] - 900.0, sim.creature.chunk0[1])
-    for _ in range(12):                         # 光标跑到很远，kill_fac 衰减到 abort
-        sim.set_cursor(far)
+    for _ in range(3):
+        sim.step(GAME_DT)
+    # 新的口径：光标在屏上就追着杀，**跑不掉**；只有光标离开屏幕（None）累计 40 tick 才 abort
+    for _ in range(C.KILL_ESCAPE_TICKS + 5):
+        sim.set_cursor(None)
         sim.step(GAME_DT)
     assert sim.kill.phase == "idle", "跑开应当 abort"
     assert abs(sim.temper.value - C.TEMPER_AFTER_ABORT) < 0.05
-    assert sim.begin_drag("body", sim.creature.chunk0) is False, "abort 冷却期内不许立刻再抓"
-    for _ in range(C.KILL_ABORT_COOLDOWN + 1):
-        sim.step(GAME_DT)
+    # 新语义（用户 2026-10-29）：只有**仪式进行中**不许拖；abort 之后立刻能拖，
+    # 被冷却拦住的是"再次触发"，不是拖拽。
     assert sim.begin_drag("body", sim.creature.chunk0) is True
+    sim.end_drag()
+    sim.temper.value = C.TEMPER_KILL_GATE - 0.01
+    for _ in range(C.KILL_ABORT_COOLDOWN - 20):
+        sim.step(GAME_DT)
+    assert sim.kill.phase == "idle", "abort 短冷却期内不许重新进仪式"
+    for _ in range(30):
+        sim.step(GAME_DT)
+    assert sim.kill.phase != "idle", "短冷却结束后应当能再次触发"
 
 
 def test_cooldown_lasts_ten_seconds():
     sim = _sim()
     sim.kill.begin(sim.cursor, sim.ticks)
-    total = C.KILL_WARNING_TICKS + 40 + C.KILL_FLASH_TICKS
-    for _ in range(total):
+    guard = 0
+    while sim.kill.phase != "cooldown" and guard < 400:
+        guard += 1
         sim.step(GAME_DT)
     assert sim.kill.phase == "cooldown"
     assert sim.kill.cooldown in (C.KILL_COOLDOWN_TICKS, C.KILL_COOLDOWN_TICKS - 1)
+    assert sim.begin_drag("body", sim.creature.chunk0) is True, "冷却期应当可以拖（只有动画期间不行）"
+    sim.end_drag()
+    sim.temper.value = C.TEMPER_KILL_GATE - 0.01
     elapsed = 0
-    while not sim.begin_drag("body", sim.creature.chunk0) and elapsed < 600:
+    # 相位是 cooldown（不是 idle），一直压着心情推，直到重新进 warning
+    while sim.kill.phase in ("idle", "cooldown") and elapsed < 600:
+        sim.temper.value = C.TEMPER_KILL_GATE - 0.01
         elapsed += 1
         sim.step(GAME_DT)
-    assert 395 <= elapsed <= 405, f"冷却应当 400 tick（10 s），实测 {elapsed}"
+    assert 380 <= elapsed <= 420, f"冷却应当 400 tick（10 s）后才允许再触发，实测 {elapsed}"
 
 
 def test_status_keeps_the_three_state_behaviour():
@@ -160,3 +183,36 @@ def test_drag_test_guard_two_hundred_ticks_is_safe():
     assert ticks == 200, "200 tick 就让仪式触发了，说明速率常数变了"
     assert sim.kill.phase == "idle"
     assert sim.dragging
+
+
+def test_trigger_retreats_to_one_and_a_half_talk_distance():
+    """用户 2026-10-29：触发时人偶要立刻挣脱光标，退到 1.5×talk 距离处站定、摆正位姿。"""
+    sim = _sim()
+    body = sim.creature.chunk0
+    sim.set_cursor((max(60.0, body[0] - 160.0), body[1]))
+    sim.temper.value = C.TEMPER_KILL_GATE - 0.01
+    for _ in range(12):                      # 挣脱 + 站定
+        sim.step(GAME_DT)
+    goal = C.TALK_DISTANCE * C.KILL_RETREAT_TALK_RATIO
+    got = dist(sim.creature.chunk0, sim.cursor)
+    assert abs(got - goal) < 3.0, f"挣脱后应离光标 {goal:.0f} px，实测 {got:.0f}"
+    assert abs(sim.creature.chunk1[0] - sim.creature.chunk0[0]) < 0.5, "身体应当摆正（竖直）"
+    assert abs(sim.creature.chunk1[1] - sim.creature.chunk0[1] - 9.0) < 1.0
+
+
+def test_charging_chases_the_cursor_and_cannot_be_dodged():
+    """用户 2026-10-29：触发挣脱之后必须杀到 —— 鼠标乱跑也照样蓄满（只跟，不衰减）。"""
+    sim = _sim()
+    body = sim.creature.chunk0
+    sim.set_cursor((max(60.0, body[0] - 160.0), body[1]))
+    sim.temper.value = C.TEMPER_KILL_GATE - 0.01
+    guard = 0
+    while sim.kill.phase != "charging" and guard < 200:
+        guard += 1
+        sim.step(GAME_DT)
+    assert sim.kill.phase == "charging"
+    base = sim.creature.chunk0
+    for i in range(95):                          # 一边跑一边推（80 tick 才蓄满，留余量）
+        sim.set_cursor((base[0] - 200.0 + (i % 20) * 30.0, base[1] + (i % 7) * 20.0))
+        sim.step(GAME_DT)
+    assert sim.kill.phase in ("flash", "cooldown"), "光标乱跑也必须蓄满并进 flash"

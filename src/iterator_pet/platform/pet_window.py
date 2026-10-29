@@ -237,6 +237,11 @@ class PetWindow(PetCanvas):
                 self.simulation.drag_to(point)
         super().mouseMoveEvent(event)
 
+    def trigger_kill(self) -> None:
+        """调试入口：把心情直接拉到闸值以下，下一 tick 就会强制打断并进仪式。"""
+        from ..simulation import constants as C
+        self.simulation.temper.value = C.TEMPER_KILL_GATE - 0.01
+
     # -- size ---------------------------------------------------------------
     @property
     def size_preset(self) -> str:
@@ -345,6 +350,10 @@ class PetWindow(PetCanvas):
         menu.addAction(action_click)
 
         menu.addSeparator()
+        action_kill = QAction("杀鼠标（调试）", menu)
+        action_kill.triggered.connect(self.trigger_kill)
+        menu.addAction(action_kill)
+
         size_menu = menu.addMenu("尺寸")
         for key, (factor, label) in SIZE_PRESETS.items():
             action_size = QAction(label, size_menu)

@@ -1,13 +1,16 @@
-feat(kill): K0 心情 + 杀鼠标仪式状态机（纯状态，无渲染）
+feat(kill): K1 白光聚拢 + 20 颗 spark + 挣脱段（视觉层面）
 
-按 docs/PLAN-kill.md v2（已过蓝军审计的 6 个 P0）实现：
-- simulation/temper.py：Temper（-1..1；拖拽按"真位移 + 屏幕 px/s"扣、30 s 回中）
-  + KillRitual（warning 40t -> charging kill_fac += 0.025/tick -> flash 6t 产 20 颗白 spark -> cooldown 400t）
-- state：破闸立刻强制打断（end_drag(fling=False) 清甩出；kill.blocked 是独立锁，不复用 drag_cooldown）；
-  仪式分支早退仍跑 creature.step + _drag_base_and_ornaments + _prev/_cur = _compose()（防白光定格）；
-  abort 后 temper 抬到 -0.30 + 200 tick 短冷却（防无限重入）；status() 增 temper/kill 键
-- pet_window：注入 scale（四档尺寸到闸时间一致）、切尺寸搬心情值、暂停/关闭/开穿透取消仪式
-- tests/test_kill.py 12 项：慢拖 19.1 s / 快拖 10.0 s / 跨档一致 / 按住不动不掉 / 打断清 fling /
-  快照每 tick 刷新 / kill_fac 恰好 40 tick / 20 颗 spark / abort 不重入 / 冷却 400 tick
+- rendering: draw_kill() 画在最后（对应 og.cs 的 Shortcuts 容器）：径向白光
+  alpha = f^3 * 5.0（用户两轮反馈：太暗，先 x2.5 再翻两倍），半径用腔室对角线
+  （Lerp(1.05*对角线, 8, sqrt(f))，仿真像素）；flash 段是**径向**白闪（审计：整屏白矩形太刺眼）
+  + 20 颗白 spark（照 ss.cs:2794-2797 的参数）
+- 挣脱段（用户要求）：触发时朝背离光标方向退到 1.5 x TALK_DISTANCE（=114 仿真 px），
+  把两个身体块摆成竖直（chunk1 = chunk0 + (0,9)），站定 20 tick 后才开始蓄能
+- 蓄能追着光标：锁定点每 tick 跟着光标走（"挣脱之后就一定杀到"），只有光标**离开屏幕**
+  累计 40 tick 才按 x0.8 衰减并 abort（源码的条件是"玩家不在房间"，桌面版的房间就是屏幕）
+- 蓄能速率 0.025 -> 0.0125（1 s -> 2 s，用户说太快；这是**有意偏离源码**，PLAN-kill §6 已记）
+- 冷却期不再禁止拖拽（用户：只有动画期间拖不动），冷却只阻止再次触发
+- RenderState 增 kill_fac/kill_anchor/kill_phase/kill_sparks/kill_flash，并在 lerp 里跟进
+  （sparks 不插值：长度会变）
 
-95 passed。
+tests/test_kill.py 14 项全绿（新增：挣脱到 114 px 且竖直、蓄能期乱跑也照样杀到）。

@@ -68,7 +68,8 @@ class Temper:
 class KillRitual:
     """杀鼠标的仪式状态机（只有状态，没有美术）。"""
 
-    __slots__ = ("phase", "kill_fac", "_t", "cooldown", "anchor", "focus", "sparks", "rng")
+    __slots__ = ("phase", "kill_fac", "_t", "cooldown", "anchor", "focus", "sparks", "rng",
+                 "retreat", "_still", "_lost")
 
     def __init__(self) -> None:
         self.phase = IDLE
@@ -80,6 +81,9 @@ class KillRitual:
         self.focus: tuple[float, float] | None = None
         self.sparks: list[list[float]] = []
         self.rng = random.Random(11)
+        # 挣脱目标（人偶要退到离光标 1.5×talk 距离处站定）；None = 还没算
+        self.retreat: tuple[float, float] | None = None
+        self._still = 0
 
     # -- 查询 ---------------------------------------------------------------
     @property
@@ -87,9 +91,20 @@ class KillRitual:
         return self.phase in (WARNING, CHARGING, FLASH)
 
     @property
+    def flash_progress(self) -> float:
+        """白闪进度 1→0（只在 flash 段非 0）。渲染用它算"闪一下"的 alpha。"""
+        if self.phase != FLASH:
+            return 0.0
+        return max(0.0, 1.0 - self._t / max(1, C.KILL_FLASH_TICKS))
+
+    @property
     def blocked(self) -> bool:
-        """仪式或冷却期内不许拖拽（"他真要动手的时候你拽不动他"）。"""
-        return self.active or self.cooldown > 0
+        """**仪式进行中**才不许拖拽（用户 2026-10-29：只有动画期间拖不动）。
+
+        冷却期只是"不许再触发"，不影响拖拽 —— 否则一次杀鼠标之后 10 秒都拖不动他，
+        手感上就是"坏了"。
+        """
+        return self.active
 
     # -- 状态迁移 -----------------------------------------------------------
     def begin(self, anchor: tuple[float, float] | None, ticks: int) -> None:
@@ -98,6 +113,9 @@ class KillRitual:
         self._t = 0
         self.anchor = anchor
         self.focus = anchor
+        self.retreat = None
+        self._still = 0
+        self._lost = 0
         self.cooldown = 0
 
     def cancel(self, ticks: int = 0) -> None:
@@ -106,6 +124,8 @@ class KillRitual:
         self._t = 0
         self.anchor = None
         self.focus = None
+        self.retreat = None
+        self._still = 0
         self.sparks.clear()
 
     def abort(self) -> None:
@@ -143,32 +163,34 @@ class KillRitual:
             # 警告段只跟"视觉焦点"，锁定点固定不动（否则后面永远量不出"跑开"）
             if cursor is not None:
                 self.focus = cursor
-            if self._t >= C.KILL_WARNING_TICKS:
+            if self._t >= C.KILL_WARNING_TICKS + C.KILL_STAND_TICKS:
                 self.phase = CHARGING
                 self._t = 0
             return None
 
         if self.phase == CHARGING:
             if cursor is not None:
+                # 用户 2026-10-29：挣脱之后**必须杀到**。所以锁定点跟着光标走（他跑不掉），
+                # 这一步刻意偏离了"跑开就衰减"的源码条件（源码的条件是"玩家不在房间"）。
+                self.anchor = cursor
                 self.focus = cursor
-                if self.anchor is None:      # 兜底：begin 时拿不到光标，就用第一个有效光标
-                    self.anchor = cursor
-            if cursor is None or self.anchor is None:
-                gap = 0.0            # 光标离开屏幕：按"还在原地"处理，不衰减也不重入
+                self._lost = 0
             else:
-                gap = math.dist(cursor, self.anchor)
-            if gap > lock_dist_sim:
-                # 跑开：kill_fac 按 0.8 衰减（ss.cs:2803），衰减到很小就 abort
+                self._lost += 1
+            if cursor is None:
+                # 光标离开屏幕 ≈ 源码的"玩家不在房间"：这时才按 ×0.8 衰减/放弃
                 self.kill_fac *= C.KILL_FAC_DECAY
-                if self.kill_fac < 0.1:
+                if self._lost > C.KILL_ESCAPE_TICKS:
                     self.abort()
-            else:
-                self.kill_fac = min(1.0, self.kill_fac + C.KILL_FAC_RATE)
-                if self.kill_fac >= 1.0:
-                    self.phase = FLASH
-                    self._t = 0
-                    self._spawn_sparks()
-                    return "flash"
+                    return "abort"
+                return None
+            # 光标在屏上：一路蓄满（追着光标）。用户口径："触发挣脱就一定杀到"。
+            self.kill_fac = min(1.0, self.kill_fac + C.KILL_FAC_RATE)
+            if self.kill_fac >= 1.0:
+                self.phase = FLASH
+                self._t = 0
+                self._spawn_sparks()
+                return "flash"
             return None
 
         if self.phase == FLASH:

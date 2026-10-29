@@ -616,16 +616,26 @@ TEMPER_DECAY = 0.0004583           # /tick，0.55/(30*40) → 30 s 从闸值回�
 TEMPER_AFTER_KILL = -0.15          # 进仪式那一刻直接把心情消耗到这里（防无限重入）
 TEMPER_AFTER_ABORT = -0.30         # 蓄能失败（光标跑开）后抬到这里
 # 仪式本身（照 ss.cs:2790-2799 / og.cs:2096-2098）
-KILL_FAC_RATE = 0.025              # /tick → 40 tick 胀满（ss.cs:2790）
+# 源码是 0.025/tick（40 tick = 1 s），但用户 2026-10-29 实机看下来"太快"，
+# 这里放慢到 0.0125（80 tick = 2 s）——**这是有意偏离源码的观感调整**，写进 PLAN-kill §6。
+KILL_FAC_RATE = 0.0125
 KILL_FAC_DECAY = 0.8               # 光标跑开时 (ss.cs:2803)
 KILL_WARNING_TICKS = 40            # 设计增补：源码进段即蓄能，没有停顿段
 KILL_FLASH_TICKS = 6               # 白闪时长（不是源码的死亡演出）
 KILL_COOLDOWN_TICKS = 400          # 10 s
 KILL_ABORT_COOLDOWN = 200          # 蓄能失败后 5 s 内不重入
-KILL_LOCK_SCREEN_PX = 260.0        # 光标离锚点多远算"跑开"
+KILL_LOCK_SCREEN_PX = 260.0        # 保留：光标离锚点多远算"跑开"（新的默认逻辑已改成追着光标）
+# 用户 2026-10-29：**只要触发挣脱就一定杀到**，不能"跑两下就放弃"。所以蓄能期间锚点
+# 跟着光标走（等于认定"你跑不掉"），只有光标**离开屏幕**（cursor is None）累计这么久才 abort。
+# 源码里 ×0.8 衰减的条件是"玩家不在房间里"（ss.cs:2788），桌面版的"房间"就是屏幕。
+KILL_ESCAPE_TICKS = 40
 KILL_SPARK_COUNT = 20              # ss.cs:2794
 KILL_SPARK_SPEED_MAX = 40.0        # ss.cs
 KILL_SPARK_LIFE = (30, 120)        # ss.cs
 KILL_GLOW_START_SCALE = 200.0      # og.cs:2097 scale = Lerp(200, 2, sqrt(f))
 KILL_GLOW_END_SCALE = 2.0
 KILL_FLASH_ALPHA = 0.5             # 审计建议：0.85 全屏太刺眼
+KILL_GLOW_ALPHA_GAIN = 5.0         # alpha = f^3 * GAIN（用户看两轮：第一次 ×2.5 后还要再翻两倍）
+KILL_RETREAT_TALK_RATIO = 1.5      # 挣脱后离光标 1.5 × TALK_DISTANCE
+KILL_RETREAT_SPEED = 12.0          # 仿真 px/tick，退得干脆但不瞬移
+KILL_STAND_TICKS = 20              # 站定后再开始蓄能（"站稳了再动手"）
