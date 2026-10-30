@@ -456,24 +456,66 @@ class PetWindow(PetCanvas):
             return
         path, kind = self._drop_hit(event)
         ok = path is not None and kind is not None
+        self._drop_moved = False
         self._drop_log(f"enter kind={kind} path={'yes' if path else 'no'} accept={ok}")
         if ok:
             event.acceptProposedAction()
         else:
             event.ignore()                     # 命中区外交还给系统（A2）
 
-    def dropEvent(self, event) -> None:
+    def dragMoveEvent(self, event) -> None:
+        """**必须实现**：`QWidget::dragMoveEvent` 默认 `ignore()`，等于告诉 Qt"这次拖放作废"，
+        于是永远到不了 `dropEvent`（实测：有 `dragEnter` 的 "+"，松手却没反应）。
+
+        这里和 `dragEnterEvent` 用同一套命中测试：在她身上 accept（光标显示 +），
+        离开她立刻 ignore（光标变回禁止），顺带让 A2 更保守。
+        """
         if not self.acceptDrops() or self.click_through:
             event.ignore()
             return
         path, kind = self._drop_hit(event)
-        if path is None or kind is None:
-            self._drop_log(f"drop kind={kind} path={'yes' if path else 'no'} -> 忽略")
+        ok = path is not None and kind is not None
+        if getattr(self, "_drop_moved", False) is not True:
+            self._drop_moved = True
+            self._drop_log(f"move kind={kind} accept={ok}")
+        if ok:
+            event.acceptProposedAction()
+        else:
             event.ignore()
-            return
-        event.acceptProposedAction()
-        result = self.llm.ask_file(path)
-        self._drop_log(f"drop kind={kind} -> {result}")
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drop_moved = False
+        self._drop_log("leave（拖出窗口）")
+
+    def dropEvent(self, event) -> None:
+        # 第一行就落日志：上一次实测只有 enter 没有 drop，说明它可能根本没进来，
+        # 或者进来第一句就抛了（pythonw 没有 stderr，异常是静默的）。
+        self._drop_moved = False
+        self._drop_log(
+            f"drop 到了 acceptDrops={self.acceptDrops()} "
+            f"click_through={self.click_through} urls={event.mimeData().hasUrls()}"
+        )
+        try:
+            if not self.acceptDrops() or self.click_through:
+                self._drop_log("drop 被开关挡住 -> 忽略")
+                event.ignore()
+                return
+            path, kind = self._drop_hit(event)
+            if path is None or kind is None:
+                self._drop_log(f"drop kind={kind} path={'yes' if path else 'no'} -> 忽略")
+                event.ignore()
+                return
+            event.acceptProposedAction()
+            result = self.llm.ask_file(path)
+            self._drop_log(f"drop kind={kind} -> {result}")
+            if result.startswith("没"):
+                # 失败时用气泡说一句（成功时回复会自己来，别抢气泡）
+                self.simulation.dialogue.start(result)
+        except Exception as exc:               # noqa: BLE001 —— 任何异常都要留证
+            import traceback
+            self._drop_log(f"drop 抛异常 {type(exc).__name__}: {exc}")
+            self._drop_log("trace: " + traceback.format_exc().replace(chr(10), " | ")[:700])
+            event.ignore()
 
     def set_llm_enabled(self, enabled: bool) -> None:
         """右键/托盘菜单的总开关：只改 ``enabled``，key 原样留着（用户 2026-10-30）。
