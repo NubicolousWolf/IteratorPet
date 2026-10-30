@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
@@ -411,6 +411,69 @@ class PetWindow(PetCanvas):
             cfg.dialogue_cooldown_talk_s,
             cfg.dialogue_cooldown_ritual_s,
         )
+        self._sync_accept_drops()
+
+    # -- 拖文件（P3，审计 A2/A15）-------------------------------------------
+    def _sync_accept_drops(self) -> None:
+        """只有"总开关 + 拖文件开关"都开着，才把自己注册成拖放接收者。
+
+        审计 A2（P0）：整屏透明窗口一旦 `setAcceptDrops(True)` 就是**整个桌面**的拖放
+        接收者。所以默认根本不注册；打开后命中区外一律 `ignore()`，并且每次
+        `dragEnter` 都往 `launcher.log` 写一行——A2 的实测就靠这行日志判断
+        "桌面上的拖放有没有被吃掉"。
+        """
+        want = bool(self.llm.config.enabled and self.llm.config.file_drop)
+        if self.acceptDrops() != want:
+            self.setAcceptDrops(want)
+            self._drop_log(f"acceptDrops={want}")
+
+    def _drop_log(self, message: str) -> None:
+        try:
+            from ..config import config_dir
+            with (config_dir() / "launcher.log").open("a", encoding="utf-8") as fh:
+                print(f"[drop] {message}", file=fh)
+        except Exception:                      # noqa: BLE001 —— 日志失败不许影响拖放
+            pass
+
+    def _drop_path(self, mime) -> str | None:
+        if mime is None or not mime.hasUrls():
+            return None
+        for url in mime.urls():
+            if url.isLocalFile():
+                return url.toLocalFile()
+        return None
+
+    def _drop_hit(self, event) -> tuple[str | None, str | None]:
+        """返回 ``(路径, 命中的部位)``。A15：拖放与"点一下搭话"共用 `hit_test`。"""
+        path = self._drop_path(event.mimeData())
+        local = event.position().toPoint()
+        point = self._sim_point(QPointF(self.mapToGlobal(local)))
+        return path, hit_test(self._drawn_state, point, self.scale)
+
+    def dragEnterEvent(self, event) -> None:
+        if not self.acceptDrops() or self.click_through:
+            event.ignore()
+            return
+        path, kind = self._drop_hit(event)
+        ok = path is not None and kind is not None
+        self._drop_log(f"enter kind={kind} path={'yes' if path else 'no'} accept={ok}")
+        if ok:
+            event.acceptProposedAction()
+        else:
+            event.ignore()                     # 命中区外交还给系统（A2）
+
+    def dropEvent(self, event) -> None:
+        if not self.acceptDrops() or self.click_through:
+            event.ignore()
+            return
+        path, kind = self._drop_hit(event)
+        if path is None or kind is None:
+            self._drop_log(f"drop kind={kind} path={'yes' if path else 'no'} -> 忽略")
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        result = self.llm.ask_file(path)
+        self._drop_log(f"drop kind={kind} -> {result}")
 
     def set_llm_enabled(self, enabled: bool) -> None:
         """右键/托盘菜单的总开关：只改 ``enabled``，key 原样留着（用户 2026-10-30）。

@@ -40,10 +40,10 @@ OUTPUT_CONTRACT = (
 TAIL_MARGIN_TOKENS = 200
 
 EVENT_LABEL = {
-    "talk": "玩家在你旁边安静地待了一会儿",
-    "drag": "玩家把你拖来拖去",
-    "ritual": "你刚完成了一次仪式",
-    "file": "玩家把一个文件放到你面前",
+    "talk": "用户的光标有一段时间没有移动了，你决定去看看。",
+    "drag": "用户正在拖拽你。",
+    "ritual": "你刚以某种方式表达了对用户的不满。",
+    "file": "用户把一个文件拿给你看。",
 }
 
 
@@ -96,7 +96,7 @@ class Card:
         return "\n".join(parts)
 
 
-# 角色卡缺失时的兜底：**说得下去**比"精确扮演"重要（玩家没填模板也能玩）
+# 角色卡缺失时的基础对话卡
 FALLBACK_CARDS = {
     "pebbles": Card(
         name="五块卵石",

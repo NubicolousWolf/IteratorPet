@@ -35,9 +35,9 @@ BEHAVIOUR_OF = {"investigate": "investigate", "talk": "talk", "idle": "roaming"}
 # talk 是"说话"，于是每句话都挂一个动作。
 TOOL_GUIDE = (
     "【动作的含义】act 会真的改变你的姿态，所以只有在你确实想做点什么时才调用：\n"
-    "- investigate：转向并看向玩家光标附近（视线跟过去）\n"
-    "- talk：走到玩家光标旁边、悬停在那里看着他（不是\"说话\"；说话用 speak）\n"
-    "- tremble：起身、发光、散出电光（一个很重的动作，别随便用）\n"
+    "- investigate：跟随光标移动一段时间。\n"
+    "- talk：走到玩家光标旁边、悬停在那里看着光标（不是\"说话\"；说话用 speak）\n"
+    "- tremble：起身、发光、散出电光，用于表达你对用户的强烈不满。\n"
     "- idle：什么也不做，回到平时的漫游\n"
     "玩家只是路过、你只想回一句时，用 speak，不要附带 act。"
 )

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 from . import actions as llm_actions
 from . import client as llm_client
+from . import fileinfo as llm_fileinfo
 from . import config as llm_config
 from . import history as llm_history
 from . import models as llm_models
@@ -152,6 +153,12 @@ class LLMRouter:
         而是玩家手打的原文——用来看"她现在会怎么回"。
         """
         text = (text or "").strip()
+        if not text:
+            return False
+        return self._ask(text, event)
+
+    def _ask(self, text: str, event: str) -> bool:
+        """把一段**已经是最终形态**的 user 文本发出去（调试/广播/文件共用）。"""
         if not text or not self.enabled or self.busy:
             return False
         assembled = llm_prompt.assemble(
@@ -170,6 +177,21 @@ class LLMRouter:
             self.client.ask, assembled.messages, bool(self.store.config.allow_actions)
         ).start()
         return True
+
+    def ask_file(self, raw_name: str) -> str:
+        """拖进来的名字 → 一 **条**专用提示词。返回给人看的一行结果。
+
+        只走名字（``fileinfo`` 负责清洗与白名单）；命中 ``即时广播-`` 前缀时当成玩家
+        直接说话（拖文件名比打开输入框快），不读"文件"。
+        """
+        drop = llm_fileinfo.classify(raw_name)
+        if not drop.ok:
+            label = drop.name or raw_name or "（空）"
+            return f"没看：{label} —— {drop.reason}"
+        if drop.kind == "broadcast":
+            return "（广播）说了一句" if self._ask(drop.text, "debug") else "（广播）没发出去"
+        return (f"读了 {drop.name}" if self._ask(drop.text, "file")
+                else f"没发出去：{drop.name}")
 
     # -- 主线程：每 tick 收一次 ----------------------------------------------
     def poll(self) -> Reply | None:
