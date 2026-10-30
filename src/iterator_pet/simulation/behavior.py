@@ -229,6 +229,8 @@ class BehaviourSelector:
     def __init__(self, seed: int = 20261027):
         self.behaviour = "roaming"
         self.ticks = 0
+        # LLM 动作强切的剩余 tick：>0 时 choose() 不改写 behaviour（段末照常回抽签）
+        self.forced = 0
         self.still_ticks = 0
         self._last_cursor: tuple[float, float] | None = None
         # Freshness: 1 = keen, 0 = fed up. Decays while the mood is active,
@@ -386,11 +388,37 @@ class BehaviourSelector:
         return self.ticks >= C.BEHAVIOUR_SEGMENT_TICKS[self.behaviour]
 
     # -- per tick ----------------------------------------------------------
+    def force_segment(self, kind: str, ticks: int) -> bool:
+        """外部（LLM 的 ``act``）强切一段行为。返回 False = 这个行为现在不能进。
+
+        **段内 `choose()` 不改写**（否则动作活不过一个 tick），段末照常回抽签；
+        抽签时"刚结束的那个"会被排除（老规则），所以强切的行为不会自我续约。
+        闸门（光标、距离、冷却）仍然生效：闸门一关就当场交还给抽签。
+        """
+        if kind not in C.BEHAVIOURS:
+            return False
+        self.behaviour = kind
+        self.ticks = 1
+        self.forced = max(1, int(ticks))
+        self.excluded = None
+        return True
+
     def choose(self, body, cursor, cursor_speed: float) -> str:
         self.tick_freshness()
         self.weights = self.weights_for(body, cursor, cursor_speed)
         self.eligible = tuple(name for name in C.BEHAVIOURS
                               if self.weights[name] > 0.0)
+        if self.forced > 0:
+            # 强切段只看"光标还在不在"，**不看"动了没有"**：这一段是模型要求的，
+            # 不是抽签决定的。用抽签那套动/静判据会把 investigate 在光标一停时
+            # 立刻掐掉，动作等于没发生。光标离屏（None）就当场交还抽签。
+            if cursor is None:
+                self.forced = 0
+            else:
+                self.forced -= 1
+                self.ticks += 1
+                self.excluded = None
+                return self.behaviour
         if self.ticks < C.BEHAVIOUR_MIN_TICKS:
             self.ticks += 1
             return self.behaviour

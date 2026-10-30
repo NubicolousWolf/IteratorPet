@@ -45,6 +45,17 @@ def _llm_line(info: dict) -> str:
     return text
 
 
+def _intent_line(info: dict) -> str:
+    """模型让她动，她到底动没动。"""
+    if not info:
+        return "-"
+    text = f'ok {info.get("accepted", 0)}  reject {info.get("rejected", 0)}'
+    last = info.get("last")
+    if last:
+        text += f"  last {last[:28]}"
+    return text
+
+
 def dev_lines(simulation) -> list[str]:
     """Format ``SimulationState.status()`` for a human.
 
@@ -96,6 +107,7 @@ def dev_lines(simulation) -> list[str]:
         # LLM（审计 A13）：没接路由器时 status() 给的是 {"enabled": False}，
         # 所以这里用 .get 取值，面板不会因为"还没接"而崩。
         ("llm", _llm_line(s.get("llm") or {})),
+        ("intents", _intent_line(s.get("intents") or {})),
         ("finite", f'{s["finite"]}' + ("" if s["finite"] else "  !")),
     ]
     width = max(len(label) for label, _ in rows)

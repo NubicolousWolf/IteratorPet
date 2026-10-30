@@ -252,3 +252,51 @@ def test_simulation_prefers_the_pool_when_the_router_says_no():
         sim._step_dialogue()
     # 路由说"不用 LLM"时，本地池照旧；这条只要求"没有因为路由而不说话"
     assert sim.dialogue_enabled is True
+
+
+# --------------------------------------------------- 动作进队列（P2 接线） --
+def _act_reply(action: str, text: str = "") -> dict:
+    return {"choices": [{"message": {"content": text, "tool_calls": [
+        {"function": {"name": "act", "arguments": json.dumps({"action": action})}}
+    ]}}]}
+
+
+def test_router_pushes_an_action_into_the_intent_queue(tmp_path):
+    transport = FakeTransport(_act_reply("talk", "过来。"))
+    router = _router(tmp_path, transport=transport, allow_actions=True)
+    assert router.request("talk") is True
+    reply = router.poll()
+    assert reply is not None and reply.action == "talk" and reply.text == "过来。"
+    intent = router.take_intent()
+    assert intent is not None and intent.action == "talk"
+    assert router.take_intent() is None, "一次只给一条"
+
+
+def test_router_refuses_to_hand_out_actions_when_the_switch_is_off(tmp_path):
+    transport = FakeTransport(_act_reply("tremble"))
+    router = _router(tmp_path, transport=transport, allow_actions=True)
+    router.request("talk")
+    router.poll()
+    # 关掉"允许控制行动"后，队列里就算有也不给
+    router.store.config.allow_actions = False
+    assert router.take_intent() is None
+
+    router.store.config.allow_actions = True
+    router.store.config.enabled = False          # 总开关关掉同样一条都不给
+    assert router.take_intent() is None
+
+
+def test_the_action_also_reaches_the_simulation(tmp_path):
+    """端到端（假 transport）：模型说 talk → 队列 → 仿真真的把行为切成 talk。"""
+    transport = FakeTransport(_act_reply("talk"))
+    router = _router(tmp_path, transport=transport, allow_actions=True)
+    sim = _sim()
+    sim.llm = router
+    sim.cursor = (sim.creature.chunk0[0] + 30.0, sim.creature.chunk0[1])
+    sim.selector.talk_cooldown = 0
+
+    router.request("talk")
+    router.poll()
+    assert sim._apply_intents() is False
+    assert sim.selector.behaviour == "talk"
+    assert sim.intent_accepted == 1

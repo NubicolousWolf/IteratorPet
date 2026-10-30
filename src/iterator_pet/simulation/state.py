@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from math import atan2, cos, degrees, hypot, radians, sin
 
+from ..llm import actions as llm_actions
 from . import constants as C
 from .appearance import Appearance, PEBBLES, appearance_for
 from .dialogue import DialogueState
@@ -186,6 +187,11 @@ class SimulationState:
         self.dialogue_enabled = True
         self.last_spoken = ""          # 上一句（喂给 LLM 当情境，「她刚才说过什么」）
         self.events = DialogueEvents()
+        # LLM 动作的账（面板/日志用）：接受了几条、拒了几条、最后一次是什么
+        self.intent_accepted = 0
+        self.intent_rejected = 0
+        self.intent_last = ""
+        self.cursor_speed = 0.0        # 本 tick 的光标速度（仿真 px/tick）
         # 仪式这一 tick 的结果（"flash" / "tremble_done" / "abort"），
         # 由 kill.step() 写入、由 _step_dialogue() 消费并清掉 —— 一次性事件。
         self._ritual_event: str | None = None
@@ -455,6 +461,89 @@ class SimulationState:
         self._prev = self._cur
         self._cur = self._compose()
 
+    # ---- LLM 动作（P2）-----------------------------------------------------
+    def _begin_tremble(self) -> None:
+        """起一次仪式（挣脱 / 白光）。
+
+        temper 破闸与 LLM 的 ``act:tremble`` **共用这一条路径**：锚点、退位目标、
+        心情抬升只有一份实现，免得两边各调一半、行为对不上（审计 A5）。
+        """
+        # 强制打断：清掉拖拽与还没执行的甩出（否则冷却结束后人偶会莫名弹一下）
+        self.end_drag(fling=False)
+        # 锚点：光标优先；光标不在屏上（None）就用拖拽点/头顶，
+        # 否则 anchor 为 None 时永远量不出"跑开"，abort 分支形同虚设（实测踩过）
+        anchor = self.cursor or self.drag_point or self.creature.head
+        self.kill.begin(anchor, self.ticks, self.appearance.tremble_only)
+        # 挣脱目标：从人偶**背离光标**方向退 1.5 个 talk 身位（用户 2026-10-29 要求），
+        # 再夹进腔室和臂展（否则退到屏幕外/臂展外）。
+        # 是"退/进到 114 px"，不是"再远离 114 px"——按后者会变成 414 px（实测踩过）。
+        away = C.dir_vec(anchor, self.creature.chunk0)
+        if away == (0.0, 0.0):
+            away = (0.0, -1.0)
+        reach = C.TALK_DISTANCE * C.KILL_RETREAT_TALK_RATIO
+        target = (anchor[0] + away[0] * reach, anchor[1] + away[1] * reach)
+        target = self._clamp_to_room(target)
+        target = self._reachable(self.rail.pose(self.frame_pos).point, target)
+        self.kill.retreat = target
+        # 只有挣脱的角色：进段就把心情抬到 -0.30（不会再有白光那一下把它压到 -0.15）
+        self.temper.value = (C.TEMPER_AFTER_ABORT if self.appearance.tremble_only
+                             else C.TEMPER_AFTER_KILL)
+        self._tick_kill()
+
+    def _intent_refusal(self, action: str) -> str:
+        """这条动作现在为什么不能做。空串 = 可以做。"""
+        if not self.dialogue_enabled:
+            return "对话关了"
+        if self.kill.active:
+            return "仪式进行中"
+        if self.dragging:
+            return "正在拖拽"
+        if self.dialogue.text:
+            return "正在说话"
+        if action in ("investigate", "talk"):
+            if self.cursor is None:
+                return "光标不在屏上"
+            if action == "talk":
+                if self.selector.talk_cooldown > 0:
+                    return "talk 冷却中"
+                if C.dist(self.creature.chunk0, self.cursor) > C.SCORE_TALK_RANGE:
+                    return "离光标太远"
+        return ""
+
+    def _apply_intents(self) -> bool:
+        """消费一条 LLM 动作。返回 ``True`` = 本 tick 已经起了仪式（调用方要 return）。
+
+        一票否决（§3.2）：仪式中 / 拖拽中 / 正在说话 / 对话关掉 —— 都不接受动作。
+        被拒的动作**不会**进本地台词池，它只是没发生（``intent_rejected`` 记账）。
+        """
+        router = self.llm
+        if router is None:
+            return False
+        take = getattr(router, "take_intent", None)
+        intent = take() if take is not None else None
+        if intent is None:
+            return False
+        action = intent.action
+        refusal = self._intent_refusal(action)
+        if refusal:
+            self.intent_rejected += 1
+            self.intent_last = f"{action}: {refusal}"
+            return False
+        if action == "tremble":
+            self._begin_tremble()
+            self.intent_accepted += 1
+            self.intent_last = "tremble"
+            return True
+        kind = llm_actions.BEHAVIOUR_OF.get(action)
+        ticks = llm_actions.ACTION_TICKS.get(action, C.BEHAVIOUR_SEGMENT_TICKS["roaming"])
+        if kind is None or not self.selector.force_segment(kind, ticks):
+            self.intent_rejected += 1
+            self.intent_last = f"{action}: 选择器拒绝"
+            return False
+        self.intent_accepted += 1
+        self.intent_last = action
+        return False
+
     def _apply_control_noop(self) -> None:
         """占位：保留调用点（旧 ``_apply_control`` 已经是空实现）。"""
         return
@@ -525,29 +614,11 @@ class SimulationState:
         # 冷却（400 tick / abort 200 tick）只阻止**再次触发**，不阻止拖拽 ——
         # 所以这里必须显式查 cooldown，不能只看 kill.blocked（后者只管"动画期间"）
         if self.temper.angry and not self.kill.active and self.kill.cooldown <= 0:
-            # 强制打断：清掉拖拽与还没执行的甩出（否则冷却结束后人偶会莫名弹一下）
-            self.end_drag(fling=False)
-            # 锚点：光标优先；光标不在屏上（None）就用拖拽点/头顶，
-            # 否则 anchor 为 None 时永远量不出"跑开"，abort 分支形同虚设（实测踩过）
-            anchor = self.cursor or self.drag_point or self.creature.head
-            self.kill.begin(anchor, self.ticks, self.appearance.tremble_only)
-            # 挣脱目标：从人偶**背离光标**方向退 1.5 个 talk 身位（用户 2026-10-29 要求），
-            # 再夹进腔室和臂展（否则退到屏幕外/臂展外）
-            # 方向：从光标指向人偶（保持"在光标外侧"的站位），距离 = 1.5 个 talk 身位。
-            # 是"退/进到 114 px"，不是"再远离 114 px"——用户说的是"移动到距离光标
-            # 1.5 倍 talk 距离"（实测按后者会变成 414 px，人偶跑到屏幕另一头）。
-            away = C.dir_vec(anchor, self.creature.chunk0)
-            if away == (0.0, 0.0):
-                away = (0.0, -1.0)
-            reach = C.TALK_DISTANCE * C.KILL_RETREAT_TALK_RATIO
-            target = (anchor[0] + away[0] * reach, anchor[1] + away[1] * reach)
-            target = self._clamp_to_room(target)
-            target = self._reachable(self.rail.pose(self.frame_pos).point, target)
-            self.kill.retreat = target
-            # 只有挣脱的角色：进段就把心情抬到 -0.30（不会再有白光那一下把它压到 -0.15）
-            self.temper.value = (C.TEMPER_AFTER_ABORT if self.appearance.tremble_only
-                                 else C.TEMPER_AFTER_KILL)
-            self._tick_kill()
+            self._begin_tremble()
+            return
+
+        # ---- LLM 意图：每 tick 最多消费一条（审计 A3/A4/A5）------------------
+        if self._apply_intents():
             return
 
         self._apply_control()
@@ -630,6 +701,7 @@ class SimulationState:
         # The selector is OUR addition (see constants.py); the three poses are
         # the source's. ``get_to`` and the gaze are then re-derived per state.
         cursor_speed = self.selector.observe_cursor(self.cursor)
+        self.cursor_speed = cursor_speed
         self.behaviour = self.selector.choose(
             self.creature.chunk0, self.cursor, cursor_speed)
         if self.behaviour == "investigate" and self.cursor is not None:
@@ -1026,6 +1098,12 @@ class SimulationState:
             # LLM 的状态（审计 A13）：没接路由器时也要有这个键，面板才能稳定取值
             "llm": self.llm.state() if self.llm is not None
             else {"enabled": False, "last_reason": "未接入"},
+            # LLM 动作的落地结果（审计 A13：面板要知道"模型让它动，她到底动没动"）
+            "intents": {
+                "accepted": self.intent_accepted,
+                "rejected": self.intent_rejected,
+                "last": self.intent_last,
+            },
             "time": round(self.time, 2),
             "behaviour": self.behaviour,
             "drag": self.drag_mode,

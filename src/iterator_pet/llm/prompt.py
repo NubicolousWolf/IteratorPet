@@ -26,6 +26,7 @@ import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import actions as llm_actions
 from . import config as llm_config
 from . import worldbook as wb
 
@@ -248,6 +249,10 @@ def assemble(
 
     # -- 组装（顺序见模块 docstring）
     system_text = _system_text(card, kept)
+    if cfg.allow_actions:
+        # 动作的含义必须写清楚（§3.3）：不然模型会以为 talk 是"说话"，
+        # 于是每一句台词都挂一个动作。
+        system_text = (system_text + "\n\n" + llm_actions.TOOL_GUIDE).strip()
     at_depth = [e for e in kept if e.position == "at_depth"]
     messages: list[dict] = []
     if system_text:

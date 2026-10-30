@@ -22,6 +22,7 @@ import re
 import time
 from dataclasses import dataclass
 
+from . import actions as llm_actions
 from . import config as llm_config
 from . import models as llm_models
 
@@ -47,6 +48,8 @@ class ChatResult:
     reason: str = ""
     status: int = 0
     latency_s: float = 0.0
+    action: str = ""          # LLM 要求的动作（白名单之一），空 = 这次只想说话
+    action_reason: str = ""   # 模型给的理由，只进日志/面板，不驱动任何东西
 
 
 def clean_line(raw, limit: int = MAX_LINE_CHARS) -> str:
@@ -210,8 +213,12 @@ class LLMClient:
         }
 
     # -- 一次调用 -----------------------------------------------------------
-    def ask(self, messages: list[dict]) -> ChatResult:
-        """同步发一次。**关掉时绝不发请求**；所有失败都变成 ``ChatResult``。"""
+    def ask(self, messages: list[dict], allow_actions: bool | None = None) -> ChatResult:
+        """同步发一次。**关掉时绝不发请求**；所有失败都变成 ``ChatResult``。
+
+        ``allow_actions``：是否把 ``speak``/``act`` 两个工具挂上去。``None`` =
+        看 ``llm.json`` 的 ``allow_actions``；``False`` 时模型拿不到工具，只能说话。
+        """
         if not self.enabled:
             return self._finish(ChatResult(False, reason=self._disabled_reason()))
         if not self.breaker.allow():
@@ -222,14 +229,9 @@ class LLMClient:
             )
 
         cfg = self.config
+        with_tools = bool(cfg.allow_actions) if allow_actions is None else bool(allow_actions)
         key = llm_config.resolve_key(cfg)
-        payload = {
-            "model": cfg.model,
-            "messages": messages,
-            "temperature": float(cfg.temperature),
-            "max_tokens": int(cfg.max_tokens),
-            "stream": False,
-        }
+        payload = self._payload(messages, with_tools)
         url = llm_models.chat_url(cfg.base_url, cfg.protocol)
         headers = llm_models.auth_headers(key, cfg.protocol)
         started = time.perf_counter()
@@ -248,16 +250,58 @@ class LLMClient:
 
         latency = time.perf_counter() - started
         try:
-            raw = parse_completion(body, cfg.protocol)
-        except ValueError as exc:
+            parsed = llm_actions.parse_reply(body, cfg.protocol)
+        except Exception as exc:                 # noqa: BLE001 —— 返回体再怪也只算失败
+            parsed = None
+            reason = f"返回体解析失败（{type(exc).__name__}）"
+        else:
+            reason = ""
+        if parsed is None:
             self.breaker.record(False)
-            return self._finish(ChatResult(False, reason=f"空回复（{exc}）", latency_s=latency))
-        text = clean_line(raw)
-        if not text:
+            return self._finish(ChatResult(False, reason=reason, latency_s=latency))
+
+        # 不支持 function calling 的模型会直接甩一段 JSON 文本（§3.4）
+        if not parsed.action and not parsed.text:
+            self.breaker.record(False)
+            return self._finish(ChatResult(False, reason="空回复", latency_s=latency))
+        if not parsed.action and parsed.text.strip().startswith("{"):
+            fallback = llm_actions.parse_json_fallback(parsed.text)
+            if fallback.action or fallback.text:
+                parsed = fallback
+
+        text = clean_line(parsed.text)
+        if not text and not parsed.action:
             self.breaker.record(False)
             return self._finish(ChatResult(False, reason="回复清洗后是空的", latency_s=latency))
         self.breaker.record(True)
-        return self._finish(ChatResult(True, text=text, status=200, latency_s=latency))
+        return self._finish(ChatResult(
+            True, text=text, status=200, latency_s=latency,
+            action=parsed.action, action_reason=parsed.reason,
+        ))
+
+    def _payload(self, messages: list[dict], with_tools: bool) -> dict:
+        """组请求体。Anthropic 的 system 是顶层参数，不能留在 messages 里。"""
+        cfg = self.config
+        payload: dict = {
+            "model": cfg.model,
+            "temperature": float(cfg.temperature),
+            "max_tokens": int(cfg.max_tokens),
+            "stream": False,
+        }
+        rows = [dict(m) for m in messages]
+        if cfg.protocol == "anthropic":
+            system = "\n\n".join(
+                str(m.get("content", "")) for m in rows if m.get("role") == "system"
+            )
+            rows = [m for m in rows if m.get("role") != "system"]
+            if system.strip():
+                payload["system"] = system
+        payload["messages"] = rows
+        if with_tools:
+            payload["tools"] = llm_actions.tool_specs(cfg.protocol)
+            payload["tool_choice"] = ({"type": "auto"} if cfg.protocol == "anthropic"
+                                      else "auto")
+        return payload
 
     def _finish(self, result: ChatResult) -> ChatResult:
         self.last_result = result
