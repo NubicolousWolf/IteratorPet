@@ -26,3 +26,8 @@ bin/
 obj/
 # 玩家自己的台词文件（源码版就放在仓库根，别提交）
 lines.json
+# 运行时数据（就在桌宠根目录；cache/ 是游戏素材，绝不能提交）
+cache/
+sprites/
+config.json
+launcher.log
