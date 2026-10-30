@@ -27,8 +27,12 @@ def _lines(tmp_path, payload: dict | None = None, seed: int = 5) -> Lines:
 # --------------------------------------------------------------------------
 def test_default_pools_are_exactly_what_the_user_asked_for():
     groups = C.DEFAULT_LINES["characters"]
-    assert groups["pebbles"]["drag"] == ["滚开。", "别烦我。", "（不触发对话）"]
-    assert groups["past_moon"]["drag"] == ["怎么了？", "请不要打扰我。", "（不触发对话）"]
+    assert groups["pebbles"]["drag"] == [
+        "滚开。", "别烦我。", "（不触发对话）", "你没有更重要的事可做吗？"
+    ]
+    assert groups["past_moon"]["drag"] == [
+        "怎么了？", "请不要打扰我。", "（不触发对话）", "我在这里。怎么了？"
+    ]
     assert groups["pebbles"]["talk"] == ["……"]
     assert groups["past_moon"]["talk"] == ["你还在这里吗？"]
 
@@ -48,7 +52,9 @@ def test_broken_json_keeps_the_previous_table(tmp_path):
     assert lines.pool("pebbles", "drag")
     path.write_text("{ 这不是 JSON", encoding="utf-8")
     assert lines.reload(force=True) is False
-    assert lines.pool("pebbles", "drag") == ["滚开。", "别烦我。", "（不触发对话）"]
+    assert lines.pool("pebbles", "drag") == [
+        "滚开。", "别烦我。", "（不触发对话）", "你没有更重要的事可做吗？"
+    ]
 
 
 def test_player_can_add_lines_and_hot_reload_picks_them_up(tmp_path):
@@ -195,3 +201,132 @@ def test_entering_talk_makes_the_pet_say_its_talk_line(tmp_path):
     sim.behaviour = "talk"
     sim.step(0.025)
     assert sim.dialogue.text == "你还在这里吗？"
+
+
+# --------------------------------------------------------------------------
+# lines.json 的自愈（玩家反馈"文件好像没有正常生成"）
+# --------------------------------------------------------------------------
+def test_empty_file_is_repaired_with_defaults(tmp_path):
+    path = tmp_path / "lines.json"
+    path.write_text("", encoding="utf-8")           # 0 字节：旧实现永远不修
+    lines = Lines(path=path)
+    assert lines.pool("pebbles", "drag"), "空文件必须被补成默认内容"
+    assert path.stat().st_size > 0
+
+
+def test_whitespace_only_file_is_repaired(tmp_path):
+    path = tmp_path / "lines.json"
+    path.write_text("   \n\n\t", encoding="utf-8")
+    lines = Lines(path=path)
+    assert lines.pool("past_moon", "talk")
+
+
+def test_file_deleted_at_runtime_is_recreated_on_the_next_tick(tmp_path):
+    path = tmp_path / "lines.json"
+    lines = Lines(path=path)
+    path.unlink()
+    for _ in range(C.DIALOGUE_RELOAD_TICKS):
+        lines.tick()
+    assert path.is_file(), "运行中删掉文件，2 秒内应当自己长回来"
+    assert json.loads(path.read_text(encoding="utf-8"))["characters"]["pebbles"]["talk"] == ["……"]
+
+
+def test_non_empty_broken_json_is_never_overwritten(tmp_path):
+    path = tmp_path / "lines.json"
+    lines = Lines(path=path)
+    broken = '{ "characters": { "pebbles": '
+    path.write_text(broken, encoding="utf-8")
+    lines.reload(force=True)
+    assert path.read_text(encoding="utf-8") == broken, "玩家手改坏的正文不能被我覆盖掉"
+    assert lines.pool("pebbles", "drag"), "但内存里要保留上一份可用表"
+
+
+def test_state_reports_path_existence_and_entries(tmp_path):
+    path = tmp_path / "lines.json"
+    lines = Lines(path=path)
+    state = lines.state()
+    assert state["path"] == str(path)
+    assert state["exists"] is True
+    assert state["size"] > 0
+    assert state["entries"] == 10         # 4 组：4+1+4+1（玩家 10-30 各加一句）
+    assert state["characters"]["past_moon"] == ["drag", "talk"]
+    assert state["loaded_from_file"] is True
+
+
+# --------------------------------------------------------------------------
+# 数据目录：**桌宠根目录**优先（用户 2026-10-30：别往 C 盘写）
+# --------------------------------------------------------------------------
+def test_pool_path_prefers_the_app_dir(tmp_path):
+    from iterator_pet.simulation.lines import pick_pool_path
+
+    app = tmp_path / "app" / "lines.json"
+    legacy = tmp_path / "legacy" / "lines.json"
+    assert pick_pool_path(app, legacy, lambda _: True) == app
+
+
+def test_pool_path_migrates_the_legacy_file(tmp_path):
+    from iterator_pet.simulation.lines import pick_pool_path
+
+    app = tmp_path / "app" / "lines.json"
+    legacy = tmp_path / "legacy" / "lines.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"characters": {"pebbles": {"talk": ["旧台词"]}}}', encoding="utf-8")
+    chosen = pick_pool_path(app, legacy, lambda _: True)
+    assert chosen == app, "老位置有内容时应当搬到桌宠目录"
+    assert "旧台词" in app.read_text(encoding="utf-8"), "玩家改过的台词不能丢"
+
+
+def test_pool_path_falls_back_when_the_app_dir_is_read_only(tmp_path):
+    from iterator_pet.simulation.lines import pick_pool_path
+
+    app = tmp_path / "readonly" / "lines.json"
+    legacy = tmp_path / "legacy" / "lines.json"
+    assert pick_pool_path(app, legacy, lambda _: False) == legacy
+
+
+def test_data_dir_is_the_app_dir_by_default():
+    from iterator_pet import config as cfg
+
+    assert cfg.data_dir() == cfg.app_dir(), "源码版/打包版都必须优先用桌宠自己的目录"
+
+
+def test_data_dir_honours_the_override(monkeypatch, tmp_path):
+    from iterator_pet import config as cfg
+
+    target = tmp_path / "sandbox"
+    monkeypatch.setattr(cfg, "_DATA_DIR", None)
+    monkeypatch.setenv("ITERATORPET_DATA_DIR", str(target))
+    assert cfg.data_dir() == target
+    monkeypatch.delenv("ITERATORPET_DATA_DIR")
+    monkeypatch.setattr(cfg, "_DATA_DIR", None)
+
+
+# --------------------------------------------------------------------------
+# 编辑器用的保存入口（保留文件里其他键，原子写）
+# --------------------------------------------------------------------------
+def test_save_pools_keeps_unknown_keys_and_strips_blank_lines(tmp_path):
+    path = tmp_path / "lines.json"
+    lines = Lines(path=path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["version"] = 7
+    raw["future_field"] = {"keep": True}
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    lines.reload(force=True)
+
+    assert lines.save_pools({("past_moon", "drag"): [" 滚开。 ", "", "   ", "别烦我。"]})
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["version"] == 7 and data["future_field"] == {"keep": True}, "未知键不能被冲掉"
+    assert data["characters"]["past_moon"]["drag"] == ["滚开。", "别烦我。"]
+    assert lines.pool("past_moon", "drag") == ["滚开。", "别烦我。"], "保存后要立刻热重载"
+    assert data["characters"]["pebbles"]["drag"], "没动到的组要原样保留"
+
+
+def test_save_pools_rebuilds_from_defaults_when_the_file_is_garbage(tmp_path):
+    path = tmp_path / "lines.json"
+    path.write_text("not json at all", encoding="utf-8")
+    lines = Lines(path=path)
+    assert lines.save_pools({("pebbles", "talk"): ["新台词"]})
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["characters"]["pebbles"]["talk"] == ["新台词"]
+    assert data["characters"]["past_moon"]["talk"], "其余组用内置默认补齐"

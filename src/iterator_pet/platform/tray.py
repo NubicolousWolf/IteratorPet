@@ -146,6 +146,15 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
         )
         character_menu.addAction(action_character)
 
+    action_edit_lines = QAction("自定义对话", menu)
+    action_edit_lines.triggered.connect(window.open_dialogue_editor)
+    menu.addAction(action_edit_lines)
+
+    action_open_data = QAction("打开数据文件夹", menu)
+    action_open_data.triggered.connect(window.open_data_folder)
+    menu.addAction(action_open_data)
+    menu.addSeparator()
+
     action_dialogue = QAction("对话", menu)
     action_dialogue.setCheckable(True)
     action_dialogue.setChecked(bool(getattr(window.config, "dialogue_enabled", True)))

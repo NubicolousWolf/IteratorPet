@@ -158,6 +158,18 @@ def main(argv: list[str] | None = None) -> int:
 
     pack = SpritePack.load(args.sprites or default_sprite_dir())
     window = create_window(cfg, sprites=pack)
+    # 玩家问"lines.json 在哪 / 有没有生效"时，日志里要能直接看到答案
+    pool = window.simulation.lines.state()
+    _log(
+        "对话池: {path} 存在={exists} 条目={entries} 来源={source}".format(
+            path=pool["path"],
+            exists=pool["exists"],
+            entries=pool["entries"],
+            source="文件" if pool["loaded_from_file"] else "内置默认",
+        )
+    )
+    if pool.get("last_error"):
+        _log(f"对话池警告: {pool['last_error']}")
     # 电光频率档位：off / eco / computing（托盘或右键菜单里能改，写回 config）
     window.simulation.halo.set_spark_rate(getattr(cfg, "spark_rate", "eco"))
     window.show()

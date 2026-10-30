@@ -5,17 +5,55 @@
 from __future__ import annotations
 
 import json
+import os
 import random
+import shutil
+import tempfile
 from pathlib import Path
 
 from . import constants as C
 
 
-def default_path() -> Path:
-    """``%LOCALAPPDATA%\\IteratorPet\\lines.json``（与 config.json 同目录）。"""
-    from ..config import config_dir
+def _writable(folder: Path) -> bool:
+    """目录能不能写（只用于选位置，探针文件写完立刻删）。"""
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe = folder / ".iterator-pet-write-probe"
+        probe.write_bytes(b"")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
 
-    return config_dir() / "lines.json"
+
+def pick_pool_path(app_path: Path, legacy_path: Path, can_write=_writable) -> Path:
+    """选台词文件位置：**优先桌宠根目录**，其次老位置。
+
+    1. 桌宠目录里已经有 ``lines.json`` → 就用它；
+    2. 老位置（``%LOCALAPPDATA%``）有 → **搬过来**（玩家改过的内容不丢）；搬不动就继续用老的；
+    3. 都没有 → 桌宠目录可写就写那儿，不可写（Program Files / 只读介质）退回老位置。
+    """
+    if app_path.is_file():
+        return app_path
+    if legacy_path.is_file():
+        try:
+            app_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(legacy_path, app_path)
+            return app_path
+        except OSError:
+            return legacy_path
+    return app_path if can_write(app_path.parent) else legacy_path
+
+
+def default_path() -> Path:
+    """默认位置：**桌宠根目录**（打包版 = 启动.exe 旁边；源码版 = 仓库根）。
+
+    只读介质（Program Files）下 ``data_dir()`` 会退回 AppData，这里再兜一次老位置，
+    保证"写不进去"不会变成"没有台词"。
+    """
+    from ..config import data_dir, legacy_data_dir
+
+    return pick_pool_path(data_dir() / "lines.json", legacy_data_dir() / "lines.json")
 
 
 class Lines:
@@ -39,9 +77,24 @@ class Lines:
 
     # -- 文件 ---------------------------------------------------------------
     def install_default_file(self) -> bool:
-        """文件不存在就写一份默认的出来（玩家随即可编辑）。"""
+        """文件**不存在或是空白**时写一份默认的出来（玩家随即可编辑）。
+
+        空白文件也要修：0 字节的 `lines.json`（写入被打断 / 编辑器新建没保存）在旧实现里
+        永远命中 "is_file() -> True" 这条早退，于是玩家看到"文件在，但里面啥都没有"。
+        """
         if self.path.is_file():
-            return False
+            try:
+                size = self.path.stat().st_size
+                if size == 0:
+                    blank = True
+                elif size < 8:                      # 只有空白字符的小文件
+                    blank = not self.path.read_text(encoding="utf-8").strip()
+                else:
+                    blank = False
+            except OSError:
+                blank = False
+            if not blank:
+                return False
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(
@@ -62,6 +115,7 @@ class Lines:
 
     def reload(self, force: bool = False) -> bool:
         """mtime 变了才重读。返回"表是否被替换"。"""
+        self.install_default_file()      # 文件被删/被清空时，每 2 s 有一次自愈机会
         signature = self._mtime()
         if not force and signature == self._signature:
             return False
@@ -110,6 +164,64 @@ class Lines:
                 kept[event] = [item for item in pool if isinstance(item, str)]
             out[character] = kept
         return out
+
+    def state(self) -> dict:
+        """给 `status()` / 日志看：文件在哪、有没有、里面几条。"""
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            size = -1
+        entries = sum(len(pool) for events in self._table.values() for pool in events.values())
+        return {
+            "path": str(self.path),
+            "exists": self.path.is_file(),
+            "size": size,
+            "entries": entries,
+            "characters": {name: sorted(events) for name, events in self._table.items()},
+            "loaded_from_file": self.loaded_from_file,
+            "installed_default": self.installed_default,
+            "last_error": self.last_error,
+        }
+
+    # -- 保存（编辑器用）------------------------------------------------------
+    def save_pools(self, updates: dict[tuple[str, str], list[str]]) -> bool:
+        """把 ``{(角色, 事件): [台词...]}`` 写回 ``lines.json``。
+
+        只动这几个组的台词，**保留**文件里其他键（`version`、以后新增的字段、别的角色的自定义组）。
+        原文读不出来就从内置默认起稿再套修改；写临时文件 + `replace`，避免半个 JSON。
+        成功返回 True（并已强制热重载），失败返回 False（旧文件保持不动）。
+        """
+        raw: dict = {}
+        try:
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                raw = loaded
+        except (OSError, ValueError):
+            raw = {}
+        if not isinstance(raw.get("characters"), dict):
+            raw = json.loads(json.dumps(self._default))
+        characters = raw.setdefault("characters", {})
+        raw.setdefault("version", self._default.get("version", 1))
+
+        for (character, event), items in updates.items():
+            bucket = characters.get(character)
+            if not isinstance(bucket, dict):
+                bucket = characters[character] = {}
+            bucket[event] = [str(item).strip() for item in items if str(item).strip()]
+
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            handle, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".lines-", suffix=".json")
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                json.dump(raw, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+            Path(tmp).replace(self.path)
+        except OSError as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return False
+
+        self.reload(force=True)
+        return True
 
     # -- 抽池 ---------------------------------------------------------------
     def pool(self, character: str, event: str) -> list[str]:

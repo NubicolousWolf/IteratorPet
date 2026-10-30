@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 import time
 
@@ -330,6 +331,34 @@ class PetWindow(PetCanvas):
     def spark_rate(self) -> str:
         return getattr(self.config, "spark_rate", "eco")
 
+    # -- 数据目录 -----------------------------------------------------------
+    def open_dialogue_editor(self) -> None:
+        """打开「自定义对话」GUI。
+
+        旧实现是 os.startfile(lines.json)：没有 .json 文件关联的机器会抛 WinError 1155，
+        又被 except OSError 静默吞掉 —— 用户看到的就是"点了没反应"。现在编辑全在程序里，
+        不依赖系统文件关联。
+        """
+        self.simulation.lines.install_default_file()
+        from .dialogue_editor import show_editor
+
+        self._dialogue_editor = show_editor(self.simulation.lines)
+
+    def open_data_folder(self) -> None:
+        """打开数据文件夹（打包版 = 启动.exe 旁边；只读介质下才是 `%LOCALAPPDATA%`）。
+
+        玩家找不到 `lines.json` 时最容易走的一条路：点菜单 → Explorer 打开那个文件夹。
+        失败（没有桌面/被策略禁）就什么都不做，绝不抛异常打断桌宠。
+        """
+        try:
+            from ..config import config_dir
+
+            folder = config_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(folder))            # noqa: S606 (Windows 专用)
+        except (OSError, AttributeError):
+            pass
+
     # -- dialogue -----------------------------------------------------------
     def set_dialogue_enabled(self, enabled: bool) -> None:
         """托盘「对话」开关。关掉立刻收起当前这句。"""
@@ -451,6 +480,15 @@ class PetWindow(PetCanvas):
                 lambda _checked=False, name=key: self.set_character(name)
             )
             character_menu.addAction(action_character)
+
+        action_edit_lines = QAction("自定义对话", menu)
+        action_edit_lines.triggered.connect(self.open_dialogue_editor)
+        menu.addAction(action_edit_lines)
+
+        action_open_data = QAction("打开数据文件夹", menu)
+        action_open_data.triggered.connect(self.open_data_folder)
+        menu.addAction(action_open_data)
+        menu.addSeparator()
 
         action_dialogue = QAction("对话", menu)
         action_dialogue.setCheckable(True)

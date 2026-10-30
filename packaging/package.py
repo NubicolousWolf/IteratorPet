@@ -46,7 +46,7 @@ README = """迭代器 · 桌面宠物
   3. 按 Ctrl+Alt+Q，任何时候都能退出。
 
 托盘菜单里还能：**尺寸**（便携版 40% / 青春版 75% / 满血版 100% / PRO 150%）、
-**角色**（五块卵石 / 仰望皓月）、**对话**（开 / 关）、
+**角色**（五块卵石 / 仰望皓月）、**对话**（开 / 关）、**编辑对话文件**、**打开数据文件夹**、
 电光频率（关 / 节能 / computing）、暂停/继续、开关鼠标穿透、开关开发者面板。
 觉得太大就先切到"便携版"或"青春版"，切完立刻生效并记住。
 
@@ -60,12 +60,14 @@ README = """迭代器 · 桌面宠物
 
 数据放在哪
 ----------
-  %LOCALAPPDATA%\\IteratorPet\\config.json    设置
-  %LOCALAPPDATA%\\IteratorPet\\lines.json     迭代器说的话（可以自己加，两秒内生效）
-  %LOCALAPPDATA%\\IteratorPet\\cache\\        从你本机游戏里切出来的图元
-  %LOCALAPPDATA%\\IteratorPet\\launcher.log   启动过程日志（排障用）
+  全都在**本文件夹**（和 启动.exe 并排，不往 C 盘写）：
+    config.json     设置
+    lines.json      迭代器说的话（可以自己加，两秒内生效；菜单「编辑对话文件」直接打开）
+    launcher.log    启动过程日志（排障用）
+    cache/          从你本机游戏里切出来的图元（删了会自动重切）
+  如果把这个文件夹放在只读位置（例如 Program Files），会退回 %LOCALAPPDATA%\IteratorPet\。
 
-卸载：删掉本文件夹，再删 %LOCALAPPDATA%\\IteratorPet 即可。
+卸载：删掉本文件夹即可（数据都在里面）。
 
 不会往你的游戏目录写任何东西
 ------------------------------
@@ -96,7 +98,28 @@ def main() -> int:
     stage = out_dir / FOLDER
     if stage.exists():
         shutil.rmtree(stage)
-    shutil.copytree(dist, stage)
+    # 运行时数据不进包：cache/ 是游戏素材（硬规则），config.json 会带开发机设置，
+    # launcher.log 是日志。lines.json 例外——它是默认台词表，随包发出去，玩家解压即可见。
+    skip = shutil.ignore_patterns("cache", "sprites", "config.json", "launcher.log")
+    shutil.copytree(dist, stage, ignore=skip)
+    # 保证包里有默认台词表：玩家解压后它就在 启动.exe 旁边，一眼能看到、直接能改。
+    if not (stage / "lines.json").exists():
+        import json as _json
+        import sys as _sys
+
+        # constants.py 只依赖 colorsys/math，脚本里补一下 src 就能直接读默认台词，
+        # 不用在这里复制一份（也不会因为 shell 没设 PYTHONPATH 就 ModuleNotFoundError）。
+        _src = str(ROOT / "src")
+        if _src not in _sys.path:
+            _sys.path.insert(0, _src)
+        from iterator_pet.simulation import constants as _constants
+
+        (stage / "lines.json").write_text(
+            _json.dumps(_constants.DEFAULT_LINES, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print("[pack] 补上默认 lines.json")
+
     (stage / "使用说明.txt").write_text(README, encoding="utf-8-sig")
 
     target = out_dir / f"{FOLDER}-v{version()}-win64.zip"

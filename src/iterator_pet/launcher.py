@@ -1,7 +1,7 @@
 """发布版入口：自动找游戏 → 初始化素材缓存 → 以**无开发者面板**形式启动桌宠。
 
 打包成 `启动.exe` 后双击即可。第一次运行会：
-1. 读 `%LOCALAPPDATA%\\IteratorPet\\config.json` 里记的 `install`；
+1. 读**桌宠文件夹**里 `config.json` 记的 `install`（老版本在 `%LOCALAPPDATA%`，会自动搬过来）；
 2. 没有就自动探测 Steam 库（`install.detect_install`）；
 3. 还找不到就弹框让玩家指到 Rain World 根目录——**也可以选“先用内置图元继续”**，
    桌宠不会因为找不到游戏就彻底起不来；

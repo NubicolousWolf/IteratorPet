@@ -33,10 +33,10 @@ SPRITE_NAMES = (
 
 
 def cache_root() -> Path:
-    import os
+    """图元缓存：跟着 `config_dir()` 走（现在默认是桌宠根目录下的 `cache/`）。"""
+    from .config import config_dir
 
-    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
-    return Path(base) / "IteratorPet" / "cache"
+    return config_dir() / "cache"
 
 
 @dataclass

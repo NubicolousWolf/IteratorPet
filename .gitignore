@@ -24,3 +24,5 @@ desktop.ini
 # .NET tool build output (tools/ildump)
 bin/
 obj/
+# 玩家自己的台词文件（源码版就放在仓库根，别提交）
+lines.json

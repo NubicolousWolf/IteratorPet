@@ -2,8 +2,6 @@
 
 一只迭代器桌宠，确切地说是fp和lttm桌宠。
 
-> 预览图由本仓库代码离线渲染：`python -m iterator\\\_pet.main --preview out.png --width 1280 --height 720 --scale 2.2`
-
 ## 发布版
 
 发布包解开后直接双击启动.exe。
@@ -13,7 +11,7 @@
 ### 首次运行 / 之后每次
 
 * **第一次运行**：自动在 Steam 库里找正版 Rain World，找不到会弹窗让你指到游戏根目录（里面有 `RainWorld.exe` 和
-`RainWorld\\\_Data` 文件夹）
+`RainWorld\\\\\\\\\\\\\\\_Data` 文件夹）
 * **之后每次运行**：配置里的路径还在就直接启动；缓存缺了才重新切一次。
 
 
@@ -23,8 +21,8 @@
 ```bash
 python -m pip install -r requirements.txt   # PySide6 + UnityPy
 $env:PYTHONPATH = "src"
-python -m iterator\\\_pet.main                 # 桌宠本体
-python -m iterator\\\_pet.launcher             # 发布版入口
+python -m iterator\\\\\\\\\\\\\\\_pet.main                 # 桌宠本体
+python -m iterator\\\\\\\\\\\\\\\_pet.launcher             # 发布版入口
 ```
 
 ## 功能
@@ -34,16 +32,17 @@ python -m iterator\\\_pet.launcher             # 发布版入口
 3. 鼠标移动时，迭代器有概率会追着鼠标跑。
 4. 你可以拖拽迭代器的人偶和底座。有很多bug，但你可以。迭代器会对拖拽作出不同反应，不过都不是什么好反应！
 5. 托盘菜单 →「角色」可以在五块卵石 / 仰望皓月之间切换。尺寸、电光频率可以调节，对话可以关。
-6. 你可以在 `%LOCALAPPDATA%\IteratorPet\lines.json` 里自定义迭代器们会说的话（改完两秒内生效；写「（不触发对话）」表示这次不说话）。
+6. 你可以在`lines.json` 里自定义
+迭代器们会说的话。也可以直接用菜单编辑对话。
 7. 按ctrl+alt+q强制退出。
 
 ### 美术资源
 
-启动时从你自己的 Rain World 安装里提取基础图元到 `%LOCALAPPDATA%\\\\IteratorPet\\\\cache\\\\sprites\\\\`。
+启动时从你自己的 Rain World 安装里提取基础图元，存到**桌宠文件夹**里的 `cache/`。
 安装路径可用环境变量覆盖：
 
 ```powershell
-$env:RAINWORLD\\\_DIR = "D:\\\\SteamLibrary\\\\steamapps\\\\common\\\\Rain World"
+$env:RAINWORLD\\\\\\\\\\\\\\\_DIR = "D:\\\\\\\\\\\\\\\\SteamLibrary\\\\\\\\\\\\\\\\steamapps\\\\\\\\\\\\\\\\common\\\\\\\\\\\\\\\\Rain World"
 ```
 
 ## 已知BUG
@@ -55,6 +54,8 @@ $env:RAINWORLD\\\_DIR = "D:\\\\SteamLibrary\\\\steamapps\\\\common\\\\Rain World
 ## 待办事项
 
 * 物品系统
+* 接入LLM
+* 优化机械臂绘制和光照
 
 
 

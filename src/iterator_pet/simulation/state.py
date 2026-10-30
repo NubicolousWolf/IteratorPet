@@ -961,6 +961,7 @@ class SimulationState:
             "character": self.appearance.key,
             "dialogue": self.dialogue.to_dict(),
             "dialogue_events": self.events.to_dict(),
+            "dialogue_pool": self.lines.state(),
             "time": round(self.time, 2),
             "behaviour": self.behaviour,
             "drag": self.drag_mode,
