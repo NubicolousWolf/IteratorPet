@@ -137,6 +137,31 @@ class LLMRouter:
         ).start()
         return True
 
+    # -- 主线程：调试入口（菜单里"直接给她发一句话"）-------------------------
+    def ask_text(self, text: str, event: str = "debug") -> bool:
+        """把玩家打的一句话原样发过去。返回 ``False`` = 没发（关着/忙/空）。
+
+        和 :meth:`request` 的区别只有一个：用户那一侧不是 ``Situation`` 模板，
+        而是玩家手打的原文——用来看"她现在会怎么回"。
+        """
+        text = (text or "").strip()
+        if not text or not self.enabled or self.busy:
+            return False
+        assembled = llm_prompt.assemble(
+            self.card,
+            self.book,
+            self.store.config,
+            history=self.chat.recent(self.store.config.history_messages),
+            situation_text=text,
+        )
+        self.last_debug = assembled.debug()
+        self.chat.append("user", text)
+        self._pending = (event, assembled)
+        self._job = self._job_factory(
+            self.client.ask, assembled.messages, bool(self.store.config.allow_actions)
+        ).start()
+        return True
+
     # -- 主线程：每 tick 收一次 ----------------------------------------------
     def poll(self) -> Reply | None:
         """还没好 → ``None``；好了 → :class:`Reply`（失败时 ``text`` 为空）。"""

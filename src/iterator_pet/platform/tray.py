@@ -160,6 +160,10 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
     action_llm_on.triggered.connect(lambda checked: window.set_llm_enabled(bool(checked)))
     menu.addAction(action_llm_on)
 
+    action_llm_debug = QAction("给 LLM 发一句话…（调试）", menu)
+    action_llm_debug.triggered.connect(window.debug_send_to_llm)
+    menu.addAction(action_llm_debug)
+
     action_open_data = QAction("打开数据文件夹", menu)
     action_open_data.triggered.connect(window.open_data_folder)
     menu.addAction(action_open_data)

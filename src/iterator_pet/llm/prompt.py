@@ -222,16 +222,22 @@ def assemble(
     situation: Situation | None = None,
     rng: random.Random | None = None,
     worldbook_budget: int | None = None,
+    situation_text: str | None = None,
 ) -> Assembled:
-    """按 §2.5 组装 messages，并把预算的两级回退走完。"""
+    """按 §2.5 组装 messages，并把预算的两级回退走完。
+
+    ``situation_text``：直接给"用户那一句"的原文（调试入口用它把玩家打的话原样发过去），
+    给了就不再拼 ``Situation`` 的模板。世界书扫描也用这段文本。
+    """
     situation = situation or Situation()
     rng = rng or random.Random(0)
     history = [(r, str(t)) for r, t in history if r in ("user", "assistant") and t]
+    user_text = situation_text if situation_text is not None else situation.to_text()
 
     # -- 世界书：只扫描最近 scan_depth 条历史 + 当前情境（§2.1 扫描深度）
     depth = max(0, book.scan_depth)
     scanned = [t for _r, t in (history[-depth:] if depth else [])]
-    scanned.append(situation.to_text())
+    scanned.append(user_text)
     activated = book.activate(scanned, rng=rng)
 
     budget = worldbook_budget
@@ -262,7 +268,7 @@ def assemble(
         tail.append({"role": "system", "content": entry.content})
     messages.extend({"role": role, "content": text} for role, text in trimmed)
     messages.extend(tail)
-    messages.append({"role": "user", "content": situation.to_text()})
+    messages.append({"role": "user", "content": user_text})
     if card.post_history_instructions:
         messages.append({"role": "system", "content": card.post_history_instructions})
 

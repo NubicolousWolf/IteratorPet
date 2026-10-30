@@ -423,6 +423,60 @@ class PetWindow(PetCanvas):
         self.apply_llm_settings()
         self.update()
 
+    # -- 调试：直接给她发一句话（菜单里的测试入口）--------------------------
+    def debug_send_to_llm(self) -> None:
+        """菜单「给 LLM 发一句话…」：把玩家打的字原样发给模型。
+
+        为什么需要它：正常路径只在拖拽/搭话/仪式时才会请求，想验"她怎么回我"就得
+        等事件；这个入口直接发一条，回复照样走气泡（以及一个弹窗，避免只回动作时
+        屏幕上什么都没有）。
+        """
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+        router = self.simulation.llm
+        if router is None:
+            QMessageBox.information(self, "给 LLM 发消息", "这个窗口没有接 LLM。")
+            return
+        if not router.enabled:
+            reason = router.client.state().get("last_reason") or "未启用"
+            QMessageBox.information(
+                self, "给 LLM 发消息",
+                f"现在发不出去：{reason}\n（设置页里勾「启用大语言模型」、填 key、选模型）",
+            )
+            return
+        if router.busy:
+            QMessageBox.information(self, "给 LLM 发消息", "正在等上一条回复，稍后再试。")
+            return
+        text, ok = QInputDialog.getText(self, "给 LLM 发消息", "你想对她说：")
+        if not ok or not text.strip():
+            return
+        if not router.ask_text(text.strip()):
+            QMessageBox.information(self, "给 LLM 发消息", "没发出去（关着或正在等回复）。")
+            return
+
+        # 等回复：轮询 last_reply，拿到 event=="debug" 的那一条就弹窗收尾
+        self._debug_timer = QTimer(self)
+        self._debug_timer.setInterval(120)
+        self._debug_timer.timeout.connect(self._debug_reply_ready)
+        self._debug_timer.start()
+
+    def _debug_reply_ready(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        router = self.simulation.llm
+        if router is None or router.busy:
+            return
+        reply = router.last_reply
+        if reply is None or reply.event != "debug":
+            return
+        self._debug_timer.stop()
+        lines = [reply.text or "（她没有说话）"]
+        if reply.action:
+            lines.append(f"动作：{reply.action}（已经进意图队列）")
+        if reply.reason:
+            lines.append(f"原因：{reply.reason}")
+        QMessageBox.information(self, "她的回复", "\n".join(lines))
+
     def set_dialogue_enabled(self, enabled: bool) -> None:
         """托盘「对话」开关。关掉立刻收起当前这句。"""
         self.dialogue_enabled = bool(enabled)
@@ -562,6 +616,10 @@ class PetWindow(PetCanvas):
             lambda checked: self.set_llm_enabled(bool(checked))
         )
         menu.addAction(action_llm_on)
+
+        action_llm_debug = QAction("给 LLM 发一句话…（调试）", menu)
+        action_llm_debug.triggered.connect(self.debug_send_to_llm)
+        menu.addAction(action_llm_debug)
 
         action_open_data = QAction("打开数据文件夹", menu)
         action_open_data.triggered.connect(self.open_data_folder)

@@ -300,3 +300,33 @@ def test_the_action_also_reaches_the_simulation(tmp_path):
     assert sim._apply_intents() is False
     assert sim.selector.behaviour == "talk"
     assert sim.intent_accepted == 1
+
+def test_debug_ask_sends_the_typed_text_verbatim(tmp_path):
+    """菜单里的"直接给她发一句话"：用户那一侧必须是玩家原文，不是情境模板。"""
+    transport = FakeTransport({"choices": [{"message": {"content": "我在。"}}]})
+    router = _router(tmp_path, transport=transport)
+    assert router.ask_text("你在吗？") is True
+
+    reply = router.poll()
+    assert reply is not None and reply.event == "debug" and reply.text == "我在。"
+    messages = transport.calls[0][1]["messages"]
+    # §2.5：最后一条永远是作者注记（system），玩家那句话在它前面
+    assert messages[-1]["role"] == "system"
+    assert messages[-2]["role"] == "user"
+    assert messages[-2]["content"] == "你在吗？", "原样发，不加情境包装"
+    assert router.chat.recent(4)[-2] == ("user", "你在吗？"), "调试这句也要进历史"
+
+
+def test_debug_ask_refuses_when_disabled_or_empty(tmp_path):
+    store = _store(tmp_path)
+    store.config.api_key = ""
+    router = llm_route.LLMRouter(store, folder=tmp_path, transport=FakeTransport({}),
+                                 job_factory=InlineJob)
+    assert router.ask_text("在吗") is False, "关着就不发"
+    assert router.ask_text("   ") is False, "空白也不发"
+
+    router = _router(tmp_path)
+    router._job_factory = lambda *a, **k: type("S", (), {"start": lambda s: s,
+                                                         "poll": lambda s: None})()
+    assert router.request("talk") is True
+    assert router.ask_text("在吗") is False, "上一条还没回来就不许插队"
