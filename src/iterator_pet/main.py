@@ -185,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     if llm_state["last_error"]:
         _log(f"LLM 配置警告: {llm_state['last_error']}")
+    if getattr(window.llm, "upgraded", False):
+        _log("LLM 配置升级: llm.json 补上了新版本新增的字段（原有内容没动）")
     # 电光频率档位：off / eco / computing（托盘或右键菜单里能改，写回 config）
     window.simulation.halo.set_spark_rate(getattr(cfg, "spark_rate", "eco"))
     window.show()

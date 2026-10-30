@@ -154,6 +154,12 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
     action_llm.triggered.connect(window.open_llm_settings)
     menu.addAction(action_llm)
 
+    action_llm_on = QAction("使用大语言模型", menu)
+    action_llm_on.setCheckable(True)
+    action_llm_on.setChecked(bool(getattr(window.llm.config, "enabled", True)))
+    action_llm_on.triggered.connect(lambda checked: window.set_llm_enabled(bool(checked)))
+    menu.addAction(action_llm_on)
+
     action_open_data = QAction("打开数据文件夹", menu)
     action_open_data.triggered.connect(window.open_data_folder)
     menu.addAction(action_open_data)

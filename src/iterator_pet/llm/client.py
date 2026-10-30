@@ -188,7 +188,8 @@ class LLMClient:
     def enabled(self) -> bool:
         cfg = self.config
         return bool(
-            llm_config.has_key(cfg)
+            cfg.enabled                       # 总开关（设置页 / 右键菜单）
+            and llm_config.has_key(cfg)
             and (cfg.model or "").strip()
             and (cfg.base_url or "").startswith(("http://", "https://"))
         )
@@ -264,6 +265,8 @@ class LLMClient:
 
     def _disabled_reason(self) -> str:
         cfg = self.config
+        if not cfg.enabled:
+            return "已关闭（设置页里勾上「启用大语言模型」）"
         if not llm_config.has_key(cfg):
             return "未启用：没有 API Key"
         if not (cfg.model or "").strip():

@@ -45,11 +45,16 @@ LIMITS: dict[str, tuple[float, float]] = {
     "worldbook_budget": (0, 8000),
     "context_window": (1024, 2_000_000),
     "action_cooldown_s": (0.0, 60.0),
+    # 三档对话冷却（秒）：玩家自己调"多久能再说一句"。0 = 不限（同一 tick 仍只一个事件）
+    "dialogue_cooldown_drag_s": (0.0, 600.0),
+    "dialogue_cooldown_talk_s": (0.0, 600.0),
+    "dialogue_cooldown_ritual_s": (0.0, 600.0),
 }
 # 这些字段必须是整数（JSON 里写成 10.0 也接受，读进来取整）
 INT_FIELDS = frozenset(
     {"version", "max_tokens", "history_messages", "worldbook_budget", "context_window"}
 )
+BOOL_FIELDS = frozenset({"enabled", "allow_actions", "file_drop"})
 
 
 @dataclass
@@ -57,6 +62,9 @@ class LLMConfig:
     """与 ``docs/templates/llm.json`` 一一对应；加字段两边一起改。"""
 
     version: int = 1
+    # 总开关（用户 2026-10-30）：不想联网时把这个关掉就行，**不用清 key**。
+    # 关掉时 LLMClient.enabled 为假、一次请求都不发，对话退回本地台词池。
+    enabled: bool = True
     provider: str = "deepseek"
     protocol: str = "openai"
     base_url: str = "https://api.deepseek.com"
@@ -74,6 +82,10 @@ class LLMConfig:
     worldbook_budget: int = 800
     history_messages: int = 10
     action_cooldown_s: float = 2.0
+    # 三档对话冷却（秒），默认值与 simulation/constants.py 里的一致
+    dialogue_cooldown_drag_s: float = 8.0
+    dialogue_cooldown_talk_s: float = 60.0
+    dialogue_cooldown_ritual_s: float = 60.0
 
 
 def default_path() -> Path:
@@ -106,7 +118,7 @@ def normalize(raw: dict) -> LLMConfig:
                 value = _clamp(name, value)
             elif name in INT_FIELDS:
                 value = int(value)
-            elif name in ("allow_actions", "file_drop"):
+            elif name in BOOL_FIELDS:
                 value = bool(value)
             elif isinstance(getattr(cfg, name), str):
                 value = str(value)
@@ -155,6 +167,7 @@ class LLMStore:
         self.config = LLMConfig()
         self.last_error = ""
         self.loaded_from_file = False
+        self.upgraded = False          # 这次有没有把文件里缺的字段补上
 
     # -- 文件 ---------------------------------------------------------------
     def install_default_file(self) -> bool:
@@ -223,6 +236,34 @@ class LLMStore:
         except (OSError, ValueError):
             raw = {}
         raw.update(asdict(cfg))
+        if not self._atomic_write(raw):
+            return False
+        self.config = cfg
+        return True
+
+    def upgrade(self) -> bool:
+        """把文件里**缺的已知字段**补上默认值。只加不改。
+
+        为什么需要它：新版本加了 `enabled` / `dialogue_cooldown_*`，老玩家的
+        `llm.json` 里没有这些键。我们不做编辑 UI，玩家要靠"打开文件看见它们"
+        才知道有这个开关——不补的话，这几个功能对老玩家等于不存在。
+        **已有键（包括玩家手改的越界值）一个都不动**，这是与 `save()` 的区别。
+        """
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not isinstance(raw, dict):
+            return False
+        defaults = asdict(LLMConfig())
+        missing = {name: value for name, value in defaults.items() if name not in raw}
+        if not missing:
+            return False
+        raw.update(missing)
+        self.upgraded = self._atomic_write(raw)
+        return self.upgraded
+
+    def _atomic_write(self, raw: dict) -> bool:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             handle, tmp = tempfile.mkstemp(
@@ -235,7 +276,6 @@ class LLMStore:
         except OSError as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
             return False
-        self.config = cfg
         return True
 
     # -- 给日志/面板 --------------------------------------------------------
@@ -244,10 +284,16 @@ class LLMStore:
         return {
             "path": str(self.path),
             "exists": self.path.is_file(),
+            "enabled": bool(self.config.enabled),
             "model": self.config.model,
             "has_key": has_key(self.config),
             "allow_actions": bool(self.config.allow_actions),
             "file_drop": bool(self.config.file_drop),
+            "cooldowns": {
+                "drag": self.config.dialogue_cooldown_drag_s,
+                "talk": self.config.dialogue_cooldown_talk_s,
+                "ritual": self.config.dialogue_cooldown_ritual_s,
+            },
             "loaded_from_file": self.loaded_from_file,
             "last_error": self.last_error,
         }

@@ -661,6 +661,9 @@ DIALOGUE_HOLD_BASE = 60              # 说完停多久（tick）
 DIALOGUE_HOLD_PER_CHAR = 2.0
 DIALOGUE_TYPE_TICKS_PER_CHAR = 2     # 逐字：每 2 tick 出一个字（20 字/秒）
 DIALOGUE_DRAG_COOLDOWN = 320         # 8 s（用户拍板）
+# 仪式（杀鼠标成功 / 过去之月挣脱完成）之后多久能再说一句。60 s：
+# 仪式是个"重"事件，连着说会把那一下冲淡。
+DIALOGUE_RITUAL_COOLDOWN = 2400
 DIALOGUE_RELOAD_TICKS = 80           # 热重载：每 2 s 查一次 mtime
 DIALOGUE_SILENT_ENTRY = "（不触发对话）"
 
@@ -672,10 +675,13 @@ DEFAULT_LINES = {
             # 2026-10-30 玩家加了第 4 条
             "drag": ["滚开。", "别烦我。", "（不触发对话）", "你没有更重要的事可做吗？"],
             "talk": ["……"],
+            # 仪式（杀鼠标）成功那一 tick
+            "ritual": ["……这样就安静了。", "别再来打扰我。"],
         },
         "past_moon": {
             "drag": ["怎么了？", "请不要打扰我。", "（不触发对话）", "我在这里。怎么了？"],
             "talk": ["你还在这里吗？"],
+            "ritual": ["……我没事。", "谢谢你还在。"],
         },
     },
 }

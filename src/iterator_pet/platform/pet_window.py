@@ -78,6 +78,7 @@ class PetWindow(PetCanvas):
         llm_templates.ensure_template_files()
         self.llm.install_default_file()   # 先补模板再读，state() 的 exists 才不会骗人
         self.llm.load()
+        self.llm.upgrade()                # 老文件缺的新字段补上（只加不改）
         self.dialogue_enabled = bool(getattr(config, 'dialogue_enabled', True))
         # LLM 路由器交给仿真持有（仿真每 tick 用；这里只负责造出来和换角色）。
         # 没 key / 没模型时 `router.enabled` 为假，仿真会走本地台词池，一行不差。
@@ -87,6 +88,7 @@ class PetWindow(PetCanvas):
             self.llm, character=self.simulation.appearance.key
         )
         self.simulation.dialogue_enabled = self.dialogue_enabled
+        self.apply_llm_settings()
         self.click_through = bool(config.click_through)
         self._paused = False
         self._press_global = None
@@ -398,6 +400,28 @@ class PetWindow(PetCanvas):
         self.simulation.llm.store = self.llm
         self.simulation.llm.client.store = self.llm
         self.simulation.llm.reload()
+        self.apply_llm_settings()
+
+    def apply_llm_settings(self) -> None:
+        """把 ``llm.json`` 里**影响仿真**的两样东西同步过去：总开关 + 三档冷却。"""
+        cfg = self.llm.config
+        self.simulation.dialogue_enabled = bool(self.dialogue_enabled)
+        self.simulation.set_dialogue_cooldowns(
+            cfg.dialogue_cooldown_drag_s,
+            cfg.dialogue_cooldown_talk_s,
+            cfg.dialogue_cooldown_ritual_s,
+        )
+
+    def set_llm_enabled(self, enabled: bool) -> None:
+        """右键/托盘菜单的总开关：只改 ``enabled``，key 原样留着（用户 2026-10-30）。
+
+        关掉后 ``LLMClient.enabled`` 立刻为假，下一次 `request()` 就不会发包；
+        正在飞的那一个请求仍然会把结果收下来（收完就不再发新的）。
+        """
+        self.llm.config.enabled = bool(enabled)
+        self.llm.save()
+        self.apply_llm_settings()
+        self.update()
 
     def set_dialogue_enabled(self, enabled: bool) -> None:
         """托盘「对话」开关。关掉立刻收起当前这句。"""
@@ -530,6 +554,14 @@ class PetWindow(PetCanvas):
         action_llm = QAction("大语言模型…", menu)
         action_llm.triggered.connect(self.open_llm_settings)
         menu.addAction(action_llm)
+
+        action_llm_on = QAction("使用大语言模型", menu)
+        action_llm_on.setCheckable(True)
+        action_llm_on.setChecked(bool(getattr(self.llm.config, "enabled", True)))
+        action_llm_on.triggered.connect(
+            lambda checked: self.set_llm_enabled(bool(checked))
+        )
+        menu.addAction(action_llm_on)
 
         action_open_data = QAction("打开数据文件夹", menu)
         action_open_data.triggered.connect(self.open_data_folder)

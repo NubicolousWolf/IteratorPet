@@ -88,6 +88,10 @@ class LLMSettingsDialog(QDialog):
         outer.setContentsMargins(16, 14, 16, 12)
         outer.setSpacing(9)
 
+        # 总开关放最上面：想安静时不用清 key（用户 2026-10-30）
+        self.enabled = QCheckBox("启用大语言模型（关掉就完全离线，对话退回本地台词）")
+        outer.addWidget(self.enabled)
+
         self.provider_deepseek = QRadioButton("DeepSeek 官方")
         self.provider_custom = QRadioButton("自定义")
         self._provider_group = QButtonGroup(self)
@@ -156,6 +160,28 @@ class LLMSettingsDialog(QDialog):
         history_hint = QLabel("0 = 不带历史；一条消息算一条（她一条、玩家一条各算一条）")
         history_hint.setStyleSheet("color:#777; font-size:11px;")
         outer.addLayout(self._row("历史", self.history, history_hint))
+
+        # 三档冷却（秒）：玩家自己决定"多久能再说一句"（用户 2026-10-30）
+        cooldowns = QHBoxLayout()
+        cooldowns.setContentsMargins(0, 0, 0, 0)
+        cooldowns.setSpacing(8)
+        self.cooldown_drag = QDoubleSpinBox()
+        self.cooldown_talk = QDoubleSpinBox()
+        self.cooldown_ritual = QDoubleSpinBox()
+        for box in (self.cooldown_drag, self.cooldown_talk, self.cooldown_ritual):
+            box.setRange(0.0, 600.0)
+            box.setDecimals(0)
+            box.setSingleStep(5.0)
+            box.setSuffix(" s")
+            box.setToolTip("冷却只影响\"多久能再说一句\"；0 = 不限")
+        for caption, box in (("拖拽后", self.cooldown_drag),
+                             ("搭话后", self.cooldown_talk),
+                             ("仪式后", self.cooldown_ritual)):
+            cooldowns.addWidget(QLabel(caption))
+            cooldowns.addWidget(box)
+            cooldowns.addSpacing(6)
+        cooldowns.addStretch(1)
+        outer.addLayout(self._row("冷却", cooldowns))
 
         self.allow_actions = QCheckBox("允许控制行动（investigate / talk / 起仪式）")
         self.file_drop = QCheckBox("把文件拖到人偶上时，把文件名交给 LLM")
@@ -233,6 +259,10 @@ class LLMSettingsDialog(QDialog):
         self.max_tokens.setValue(int(cfg.max_tokens))
         self.timeout_s.setValue(float(cfg.timeout_s))
         self.history.setValue(int(cfg.history_messages))
+        self.cooldown_drag.setValue(float(cfg.dialogue_cooldown_drag_s))
+        self.cooldown_talk.setValue(float(cfg.dialogue_cooldown_talk_s))
+        self.cooldown_ritual.setValue(float(cfg.dialogue_cooldown_ritual_s))
+        self.enabled.setChecked(bool(cfg.enabled))
         self.allow_actions.setChecked(bool(cfg.allow_actions))
         self.file_drop.setChecked(bool(cfg.file_drop))
         self._on_provider_changed()
@@ -260,6 +290,10 @@ class LLMSettingsDialog(QDialog):
                 "max_tokens": self.max_tokens.value(),
                 "timeout_s": self.timeout_s.value(),
                 "history_messages": self.history.value(),
+                "dialogue_cooldown_drag_s": self.cooldown_drag.value(),
+                "dialogue_cooldown_talk_s": self.cooldown_talk.value(),
+                "dialogue_cooldown_ritual_s": self.cooldown_ritual.value(),
+                "enabled": self.enabled.isChecked(),
                 "allow_actions": self.allow_actions.isChecked(),
                 "file_drop": self.file_drop.isChecked(),
                 "context_window": self._current_context() or base.context_window,

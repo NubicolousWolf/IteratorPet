@@ -186,6 +186,9 @@ class SimulationState:
         self.dialogue_enabled = True
         self.last_spoken = ""          # 上一句（喂给 LLM 当情境，「她刚才说过什么」）
         self.events = DialogueEvents()
+        # 仪式这一 tick 的结果（"flash" / "tremble_done" / "abort"），
+        # 由 kill.step() 写入、由 _step_dialogue() 消费并清掉 —— 一次性事件。
+        self._ritual_event: str | None = None
         self.scale = 1.5
         self._drag_prev_point: tuple[float, float] | None = None
         # 松手后的"甩"：自己积分一小段，不依赖 wander 的贝塞尔（那条路会把目标夹回臂展内）
@@ -433,6 +436,7 @@ class SimulationState:
                 self.creature.chunk1 = (target[0], target[1] + 9.0)
                 self.kill._still += 1
         event = self.kill.step(cursor, C.KILL_LOCK_SCREEN_PX / max(0.2, float(self.scale)))
+        self._ritual_event = event        # 对话层在 _step_dialogue 里消费这一次
         if event in ("abort", "tremble_done"):
             # 蓄能失败（光标跑开）或"只有挣脱"的角色跑完挣脱段：心情抬到 -0.30 并进短冷却
             self.temper.value = C.TEMPER_AFTER_ABORT
@@ -932,7 +936,13 @@ class SimulationState:
                 # LLM 这条路走不通 → 用同一事件抽一句本地台词（玩家不该面对沉默）
                 self._say(self.lines.next_line(self.appearance.key, reply.event))
 
-        fired = self.events.tick(self.behaviour, self.dragging, self.kill.active)
+        fired = self.events.tick(
+            self.behaviour,
+            self.dragging,
+            self.kill.active,
+            self._ritual_event in ("flash", "tremble_done"),
+        )
+        self._ritual_event = None          # 一次性：同一 tick 的 flash 只算一次仪式
         if fired:
             asked = False
             if self.llm is not None and self.dialogue_enabled:
@@ -952,6 +962,22 @@ class SimulationState:
             return
         self.dialogue.start(text)
         self.last_spoken = text
+
+    def set_dialogue_cooldowns(self, drag_s: float | None = None,
+                               talk_s: float | None = None,
+                               ritual_s: float | None = None) -> None:
+        """设置页里的冷却（秒）→ 事件冷却（tick）。
+
+        只影响"多久能再说一句"，不影响行为抽签（``talk`` 行为本身仍是 60 s 一次）。
+        ``None`` = 这项不动。
+        """
+
+        def ticks(seconds: float | None) -> int | None:
+            if seconds is None:
+                return None
+            return int(round(max(0.0, float(seconds)) * C.GAME_HZ))
+
+        self.events.set_cooldowns(ticks(drag_s), ticks(talk_s), ticks(ritual_s))
 
     def cancel_dialogue(self) -> None:
         """硬收起 + 清事件冷却（暂停 / 换角色时调，审计 A2/A3）。"""

@@ -39,7 +39,8 @@ from ..simulation import constants as C
 from ..simulation.lines import Lines
 
 CHARACTERS = (("pebbles", "五块卵石"), ("past_moon", "仰望皓月"))
-EVENTS = (("drag", "拖拽"), ("talk", "长时间静止"))
+# 事件是下拉里的三项；`ritual` 是 2026-10-30 按用户要求补的（仪式成功时说话）
+EVENTS = (("drag", "拖拽"), ("talk", "长时间静止"), ("ritual", "仪式"))
 SILENT = C.DIALOGUE_SILENT_ENTRY
 
 _OPEN: list["DialogueEditor"] = []

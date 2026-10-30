@@ -225,7 +225,17 @@ class Lines:
 
     # -- 抽池 ---------------------------------------------------------------
     def pool(self, character: str, event: str) -> list[str]:
-        return list(self._table.get(character, {}).get(event) or [])
+        """某个角色某个事件的台词表。
+
+        **缺这一组**（老 ``lines.json`` 没有后来新增的 ``ritual``）时回落到内置默认：
+        玩家不该因为"没手动加新事件"就在更新后变成哑巴。玩家**故意清空**的组
+        （键存在、值是空表）仍然按"沉默"处理，不会被默认值顶回来。
+        """
+        bucket = self._table.get(character) or {}
+        if event in bucket:
+            return list(bucket[event])
+        default = (self._default.get("characters") or {}).get(character) or {}
+        return list(default.get(event) or [])
 
     def next_line(self, character: str, event: str) -> str | None:
         """返回一句台词；``None`` = 这次不说话（池空 / 抽到哨兵）。"""

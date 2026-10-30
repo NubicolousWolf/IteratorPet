@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "enabled": true,
   "provider": "deepseek",
   "protocol": "openai",
   "base_url": "https://api.deepseek.com",
@@ -14,5 +15,8 @@
   "file_drop": false,
   "worldbook_budget": 800,
   "history_messages": 10,
-  "action_cooldown_s": 2
+  "action_cooldown_s": 2,
+  "dialogue_cooldown_drag_s": 8.0,
+  "dialogue_cooldown_talk_s": 60.0,
+  "dialogue_cooldown_ritual_s": 60.0
 }

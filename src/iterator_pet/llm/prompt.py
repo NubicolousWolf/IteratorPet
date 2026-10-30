@@ -41,6 +41,7 @@ TAIL_MARGIN_TOKENS = 200
 EVENT_LABEL = {
     "talk": "玩家在你旁边安静地待了一会儿",
     "drag": "玩家把你拖来拖去",
+    "ritual": "你刚完成了一次仪式",
     "file": "玩家把一个文件放到你面前",
 }
 
