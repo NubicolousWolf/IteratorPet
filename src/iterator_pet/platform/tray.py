@@ -150,6 +150,10 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
     action_edit_lines.triggered.connect(window.open_dialogue_editor)
     menu.addAction(action_edit_lines)
 
+    action_llm = QAction("大语言模型…", menu)
+    action_llm.triggered.connect(window.open_llm_settings)
+    menu.addAction(action_llm)
+
     action_open_data = QAction("打开数据文件夹", menu)
     action_open_data.triggered.connect(window.open_data_folder)
     menu.addAction(action_open_data)

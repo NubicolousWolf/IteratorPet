@@ -170,6 +170,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     if pool.get("last_error"):
         _log(f"对话池警告: {pool['last_error']}")
+    # 玩家问"我的 key 生效没 / llm.json 在哪"时日志里要有答案。
+    # 只写"有没有 key"，key 本身永远不进日志（审计 A9）。
+    llm_state = window.llm.state()
+    _log(
+        "LLM: {path} 存在={exists} 模型={model} 有key={key} 行动={actions} 拖文件={drop}".format(
+            path=llm_state["path"],
+            exists=llm_state["exists"],
+            model=llm_state["model"] or "（未选）",
+            key="是" if llm_state["has_key"] else "否",
+            actions="开" if llm_state["allow_actions"] else "关",
+            drop="开" if llm_state["file_drop"] else "关",
+        )
+    )
+    if llm_state["last_error"]:
+        _log(f"LLM 配置警告: {llm_state['last_error']}")
     # 电光频率档位：off / eco / computing（托盘或右键菜单里能改，写回 config）
     window.simulation.halo.set_spark_rate(getattr(cfg, "spark_rate", "eco"))
     window.show()

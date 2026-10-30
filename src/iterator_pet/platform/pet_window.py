@@ -12,6 +12,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
 from ..config import SIZE_PRESETS, Config, load, save, scale_for
+from ..llm import config as llm_config
 from ..rendering.hit import hit_test
 from ..rendering.canvas import PetCanvas
 from ..simulation.state import SimulationState
@@ -69,6 +70,11 @@ class PetWindow(PetCanvas):
             sprites=sprites,
         )
         self.config = config
+        # LLM 的连接与开关在独立的 llm.json（见 llm/config.py）；这里只持有读写器，
+        # P1 阶段还没有任何 tick 级调用 —— 关掉时对仿真完全无影响（审计 A1 的前提）。
+        self.llm = llm_config.LLMStore()
+        self.llm.install_default_file()   # 先补模板再读，state() 的 exists 才不会骗人
+        self.llm.load()
         self.dialogue_enabled = bool(getattr(config, 'dialogue_enabled', True))
         self.click_through = bool(config.click_through)
         self._paused = False
@@ -360,6 +366,18 @@ class PetWindow(PetCanvas):
             pass
 
     # -- dialogue -----------------------------------------------------------
+    def open_llm_settings(self):
+        """打开「大语言模型」设置页（只读写 ``llm.json``，不碰仿真）。
+
+        P1 只到"连得上、选得对模型"为止：设置页保存后不需要重建任何东西。
+        等 L2 把 ``LLMClient`` 接进 tick 时，这里再负责把新配置交给它。
+        """
+        from .llm_settings import show_settings
+
+        self.llm.install_default_file()
+        self.llm.load()
+        return show_settings(self.llm)
+
     def set_dialogue_enabled(self, enabled: bool) -> None:
         """托盘「对话」开关。关掉立刻收起当前这句。"""
         self.dialogue_enabled = bool(enabled)
@@ -484,6 +502,10 @@ class PetWindow(PetCanvas):
         action_edit_lines = QAction("自定义对话", menu)
         action_edit_lines.triggered.connect(self.open_dialogue_editor)
         menu.addAction(action_edit_lines)
+
+        action_llm = QAction("大语言模型…", menu)
+        action_llm.triggered.connect(self.open_llm_settings)
+        menu.addAction(action_llm)
 
         action_open_data = QAction("打开数据文件夹", menu)
         action_open_data.triggered.connect(self.open_data_folder)
