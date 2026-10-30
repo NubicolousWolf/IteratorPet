@@ -506,7 +506,11 @@ class PetWindow(PetCanvas):
                 event.ignore()
                 return
             event.acceptProposedAction()
-            result = self.llm.ask_file(path)
+            # 注意：`self.llm` 是 LLMStore（配置文件那层），路由器在仿真里。
+            # 上一版写成 self.llm.ask_file() → AttributeError，拖放静默失败。
+            router = self.simulation.llm
+            result = (router.ask_file(path) if router is not None
+                      else "没发出去：没有接 LLM 路由器")
             self._drop_log(f"drop kind={kind} -> {result}")
             if result.startswith("没"):
                 # 失败时用气泡说一句（成功时回复会自己来，别抢气泡）

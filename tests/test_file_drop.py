@@ -140,3 +140,21 @@ def test_ask_file_routes_a_broadcast_as_speech(tmp_path):
 def test_the_extension_whitelist_is_not_empty_and_lowercase():
     assert all(ext == ext.lower() and ext.startswith(".") for ext in llm_fileinfo.EXTENSIONS)
     assert ".png" in llm_fileinfo.EXTENSIONS
+
+
+# ------------------------------------------------------------- 接线守卫 --
+def test_the_window_asks_the_router_not_the_store():
+    """接线守卫：`PetWindow.llm` 是 LLMStore（配置文件），路由器在 `simulation.llm`。
+
+    真机上就因为写成了 `self.llm.ask_file()` 抛 `AttributeError`，而 `dropEvent` 里的
+    异常在 pythonw 下是静默的 —— 表现是"松手没反应"，两轮才查出来。
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1]
+              / "src" / "iterator_pet" / "platform" / "pet_window.py").read_text(encoding="utf-8")
+    # 注释里允许出现旧写法（就是写给下一个人的），只查**可执行**的行
+    code = [ln for ln in source.splitlines() if not ln.lstrip().startswith("#")]
+    code_text = chr(10).join(code)
+    assert "self.llm.ask_file" not in code_text, "路由器不在 self.llm 上"
+    assert "self.simulation.llm" in code_text, "路由器在仿真里"
