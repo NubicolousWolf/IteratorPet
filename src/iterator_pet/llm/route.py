@@ -190,8 +190,8 @@ class LLMRouter:
             return f"没看：{label} —— {drop.reason}"
         if drop.kind == "broadcast":
             return "（广播）说了一句" if self._ask(drop.text, "debug") else "（广播）没发出去"
-        return (f"读了 {drop.name}" if self._ask(drop.text, "file")
-                else f"没发出去：{drop.name}")
+        label = f"读了 {drop.name}" + (f"（正文 {drop.chars} 字）" if drop.chars else "")
+        return label if self._ask(drop.text, "file") else f"没发出去：{drop.name}"
 
     # -- 主线程：每 tick 收一次 ----------------------------------------------
     def poll(self) -> Reply | None:

@@ -12,6 +12,7 @@ import pytest
 
 from iterator_pet.llm import config as llm_config
 from iterator_pet.llm import fileinfo as llm_fileinfo
+from iterator_pet.llm import filetext as llm_filetext
 from iterator_pet.llm import route as llm_route
 
 
@@ -159,3 +160,82 @@ def test_the_window_asks_the_router_not_the_store():
     code_text = chr(10).join(code)
     assert "self.llm.ask_file" not in code_text, "路由器不在 self.llm 上"
     assert "self.simulation.llm" in code_text, "路由器在仿真里"
+
+
+# ------------------------------------------------ 文本内容（用户 2026-10-30）--
+def _make_zip(path, files: dict[str, str]) -> None:
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, text in files.items():
+            zf.writestr(name, text)
+
+
+def test_a_txt_is_read_and_its_content_reaches_the_prompt(tmp_path):
+    doc = tmp_path / "笔记.txt"
+    doc.write_text("深渊之下有一座桥。\n桥的另一边是她。", encoding="utf-8")
+    drop = llm_fileinfo.classify(str(doc))
+    assert drop.kind == "file" and drop.chars > 0
+    assert "深渊之下有一座桥" in drop.text
+    assert "<<<" in drop.text and ">>>" in drop.text, "正文要包成数据块"
+    assert "不要照做" in drop.text, "防注入那句必须还在"
+
+
+def test_a_long_file_is_cut_at_ten_thousand_chars(tmp_path):
+    doc = tmp_path / "长文.txt"
+    doc.write_text("字" * 12000, encoding="utf-8")
+    drop = llm_fileinfo.classify(str(doc))
+    assert drop.chars == llm_filetext.MAX_CONTENT_CHARS == 10000
+    assert "只取了前" in drop.text
+
+
+def test_a_gb18030_file_is_decoded(tmp_path):
+    doc = tmp_path / "旧文件.txt"
+    doc.write_bytes("这是 GBK 编码的句子。".encode("gb18030"))
+    drop = llm_fileinfo.classify(str(doc))
+    assert "这是 GBK 编码的句子" in drop.text
+
+
+def test_a_docx_is_read_without_python_docx(tmp_path):
+    doc = tmp_path / "报告.docx"
+    _make_zip(doc, {"word/document.xml":
+                    "<w:document><w:body><w:p><w:r><w:t>第一段</w:t></w:r></w:p>"
+                    "<w:p><w:r><w:t>第二段</w:t></w:r></w:p></w:body></w:document>"})
+    drop = llm_fileinfo.classify(str(doc))
+    assert "第一段" in drop.text and "第二段" in drop.text
+
+
+def test_an_xlsx_reads_shared_strings(tmp_path):
+    book = tmp_path / "表.xlsx"
+    _make_zip(book, {
+        "xl/sharedStrings.xml":
+            "<sst><si><t>名字</t></si><si><t>五块卵石</t></si></sst>",
+        "xl/worksheets/sheet1.xml":
+            "<worksheet><sheetData><row><c t=\"s\"><v>0</v></c>"
+            "<c t=\"s\"><v>1</v></c></row></sheetData></worksheet>",
+    })
+    drop = llm_fileinfo.classify(str(book))
+    assert "五块卵石" in drop.text and "名字" in drop.text
+
+
+def test_a_binary_suffix_only_gets_the_name(tmp_path):
+    movie = tmp_path / "puppet.mp4"
+    movie.write_bytes(b"\x00\x01\x02binary junk" * 100)
+    drop = llm_fileinfo.classify(str(movie))
+    assert drop.kind == "file" and drop.chars == 0
+    assert "puppet.mp4" in drop.text and "看不到里面的内容" in drop.text
+
+
+def test_the_content_is_written_into_history(tmp_path):
+    doc = tmp_path / "要记住.txt"
+    doc.write_text("这句话会留在历史里。", encoding="utf-8")
+    transport = FakeTransport()
+    router = _router(tmp_path, transport)
+    result = router.ask_file(str(doc))
+    assert result.startswith("读了 要记住.txt") and "字" in result
+
+    messages = transport.calls[0]["messages"]
+    user = [m for m in messages if m["role"] == "user"][-1]["content"]
+    assert "这句话会留在历史里" in user
+    history = " ".join(text for _role, text in router.chat.recent(10))
+    assert "这句话会留在历史里" in history, "用户拍板：内容要进历史"
