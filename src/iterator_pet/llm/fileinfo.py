@@ -5,7 +5,7 @@
 1. 只取 ``Path.name``（基名 + 后缀），**不传路径、不读内容**；
 2. 清洗：去控制字符/换行、压成一行、截到 64 字符（保住后缀）——文件名是**数据**，
    不是指令，所以进 prompt 时用「」包起来；
-3. 后缀白名单之外一律回"这个后缀我不认识"，不猜、不硬读。
+3. **不按后缀过滤**：后缀一起交给模型，由它判断这是什么；只保证不传路径、不读内容。
 
 一个特例（用户 2026-10-30）：名字以 ``即时广播-`` 开头时，**不是文件**，而是玩家
 借文件名直接对她说话（拖放比打开输入框快）。此时把前缀后面的部分当玩家原文发过去。
@@ -20,15 +20,10 @@ MAX_NAME_CHARS = 64
 MAX_BROADCAST_CHARS = 200
 BROADCAST_PREFIX = "即时广播-"
 
-EXTENSIONS = (
-    ".png", ".jpg", ".jpeg", ".gif", ".webp",
-    ".txt", ".md", ".json", ".py", ".js",
-    ".zip", ".exe", ".pdf", ".docx",
-)
-
 FILE_PROMPT = (
-    "玩家把一份文件放到你面前，你只看得见它的名字：「{name}」。"
-    "你看不到里面的内容。用一句话说说这个名字让你想到什么——别说你在读文件。"
+    "玩家把一样东西放到你面前，你只看得见它的名字：「{name}」。"
+    "后缀往往能看出它是什么（.png 是图、.mp4 是视频、.txt 是文字……），"
+    "你看不到里面的内容。用一句话说说它让你想到什么——别说你在读文件。"
 )
 
 BROADCAST_PROMPT = "玩家借文件名直接对你说话：「{text}」。像平时一样回一句。"
@@ -78,9 +73,7 @@ def classify(raw: str) -> Drop:
             return Drop(reason="广播里没写话")
         return Drop(kind="broadcast", name=name, text=BROADCAST_PROMPT.format(text=text))
 
-    suffix = Path(name).suffix.lower()
-    if not suffix:
-        return Drop(name=name, reason="没有后缀，我不知道是什么")
-    if suffix not in EXTENSIONS:
-        return Drop(name=name, reason=f"我不认识 {suffix} 这种文件")
+    # 后缀**不再过滤**（用户 2026-10-30）：把名字（含后缀）原样交给模型，
+    # 由它自己判断这是图、视频还是文本——后缀本身就是信息，我们没必要先猜一遍。
+    # 连"没有后缀"也照发：可能是个文件夹，她只看得见名字，照样能说点什么。
     return Drop(kind="file", name=name, text=FILE_PROMPT.format(name=name))

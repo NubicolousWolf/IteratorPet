@@ -76,14 +76,18 @@ def test_a_known_extension_is_a_file():
     assert drop.text.count("\n") == 0
 
 
-def test_an_unknown_extension_is_refused_not_guessed():
-    drop = llm_fileinfo.classify("virus.xyz")
-    assert drop.kind == "" and "xyz" in drop.reason
+def test_any_extension_is_sent_because_the_suffix_is_information():
+    """用户 2026-10-30：不搞白名单，后缀一起交给模型，让它自己判断这是什么。"""
+    for name in ("virus.xyz", "five-pebbles-实机.mp4", "a.unknownext"):
+        drop = llm_fileinfo.classify(name)
+        assert drop.kind == "file", name
+        assert name in drop.text
 
 
-def test_a_file_without_extension_is_refused():
-    drop = llm_fileinfo.classify("README")
-    assert drop.kind == "" and drop.reason
+def test_a_name_without_extension_is_still_sent():
+    """可能是文件夹：她只看得见名字，照样能说点什么。"""
+    drop = llm_fileinfo.classify("游戏截图")
+    assert drop.kind == "file" and "游戏截图" in drop.text
 
 
 def test_an_empty_name_is_refused():
@@ -118,12 +122,12 @@ def test_ask_file_sends_one_dedicated_prompt(tmp_path):
     assert router.chat.recent(2)[-2] == ("user", user)
 
 
-def test_ask_file_refuses_an_unknown_extension_without_sending(tmp_path):
+def test_ask_file_sends_even_for_an_unknown_extension(tmp_path):
     transport = FakeTransport()
     router = _router(tmp_path, transport)
-    result = router.ask_file("payload.xyz")
-    assert result.startswith("没看：")
-    assert transport.calls == [], "不认识的后缀一个请求都不发"
+    result = router.ask_file("five-pebbles.mp4")
+    assert result.startswith("读了 five-pebbles.mp4")
+    assert transport.calls, "不再按后缀拦截"
 
 
 def test_ask_file_routes_a_broadcast_as_speech(tmp_path):
@@ -137,9 +141,6 @@ def test_ask_file_routes_a_broadcast_as_speech(tmp_path):
     assert "今天好安静" in user
 
 
-def test_the_extension_whitelist_is_not_empty_and_lowercase():
-    assert all(ext == ext.lower() and ext.startswith(".") for ext in llm_fileinfo.EXTENSIONS)
-    assert ".png" in llm_fileinfo.EXTENSIONS
 
 
 # ------------------------------------------------------------- 接线守卫 --
