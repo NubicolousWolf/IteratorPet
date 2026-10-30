@@ -25,4 +25,4 @@ testpaths = ["tests"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-iterator_pet = ["assets/*.png"]
+iterator_pet = ["assets/*.png", "assets/*.ico", "assets/llm/*.json", "assets/llm/characters/*.json"]

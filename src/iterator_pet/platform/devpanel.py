@@ -28,6 +28,23 @@ VALUE = QColor(226, 220, 212)
 WARN = QColor(240, 120, 90)
 
 
+def _llm_line(info: dict) -> str:
+    """一行说清"她这次为什么说得出来/说不出来"。"""
+    if not info.get("enabled"):
+        return f'off  ({info.get("last_reason") or "未配置"})'
+    text = (f'on  {info.get("model", "-")}  calls {info.get("calls", 0)}'
+            f'  hist {info.get("history_messages", 0)}')
+    if info.get("pending"):
+        text += "  ·在等回复"
+    breaker = info.get("breaker") or {}
+    if breaker.get("open"):
+        text += f'  !熔断 {breaker.get("cooldown_left_s", 0):.0f}s'
+    reason = info.get("last_reason")
+    if reason and not info.get("last_ok"):
+        text += f"  !{reason[:40]}"
+    return text
+
+
 def dev_lines(simulation) -> list[str]:
     """Format ``SimulationState.status()`` for a human.
 
@@ -75,6 +92,10 @@ def dev_lines(simulation) -> list[str]:
                  f'{s["cord_stretch"]:.3f} (free {s["cord_stretch_free"]:.3f})'),
         ("filaments", f'worst drawn/rope {s["filament_worst"]:.2f}'
          + ("  !" if s["filament_worst"] > 3.0 else "")),
+        ("", ""),
+        # LLM（审计 A13）：没接路由器时 status() 给的是 {"enabled": False}，
+        # 所以这里用 .get 取值，面板不会因为"还没接"而崩。
+        ("llm", _llm_line(s.get("llm") or {})),
         ("finite", f'{s["finite"]}' + ("" if s["finite"] else "  !")),
     ]
     width = max(len(label) for label, _ in rows)

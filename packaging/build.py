@@ -66,6 +66,9 @@ def build(out_dir: Path) -> None:
         "--add-data", f"{SRC / 'iterator_pet' / 'assets' / 'tray.png'};iterator_pet/assets",
         # Win32 托盘用 LoadImageW 从 .ico 取 HICON（tray.png 只给窗口图标用）
         "--add-data", f"{SRC / 'iterator_pet' / 'assets' / 'icon.ico'};iterator_pet/assets",
+        # LLM 模板（llm.json / worldbook.json / characters/*.json）：首次运行要复制到
+        # 桌宠根目录。少了这一行，玩家会看到"说好的可以自己改的 JSON 根本不存在"。
+        "--add-data", f"{SRC / 'iterator_pet' / 'assets' / 'llm'};iterator_pet/assets/llm",
         # UnityPy 的 export/__init__ 会连带 import AudioClipConverter -> fmod_toolkit，
         # 而 fmod_toolkit 用 ctypes 去加载包内的 libfmod/.../fmod.dll；只收 .pyd 不收数据，
         # 冻结后就会 FileNotFoundError，切素材这一步静默退化（实机表现为"没有游戏素材"）。

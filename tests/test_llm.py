@@ -178,9 +178,21 @@ def test_load_keeps_defaults_and_reports_a_broken_file(tmp_path):
     store = llm_config.LLMStore(path=tmp_path / "llm.json")
     store.path.write_text("{ nope", encoding="utf-8")
     cfg = store.load()
-    assert cfg.model == "deepseek-chat" and cfg.history_messages == 10
+    assert cfg.model == "" and cfg.history_messages == 10
     assert "不是合法 JSON" in store.last_error
     assert not store.loaded_from_file
+
+
+def test_default_model_is_empty_on_purpose(tmp_path):
+    """用户 2026-10-30 拍板：默认不填 deepseek-chat，免得玩家忘改就发错模型。"""
+    store = _store(tmp_path)
+    assert store.config.model == ""
+    assert json.loads(store.path.read_text(encoding="utf-8"))["model"] == ""
+    # 没选模型时一次请求都不该发出去
+    fake = FakeTransport({})
+    result = llm_models.run_probe(fake, "https://x", SECRET, "")
+    assert not result.ok and "先选一个模型" in result.reason
+    assert fake.calls == []
 
 
 def test_save_preserves_unknown_keys_and_clamps_out_of_range(tmp_path):

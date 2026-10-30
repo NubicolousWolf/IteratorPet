@@ -180,6 +180,11 @@ class SimulationState:
         # ---- 对话/事件（docs/PLAN-dialogue.md）：纯数据，绘制在 platform 层 ----
         self.lines = Lines(seed=seed)
         self.dialogue = DialogueState()
+        # LLM 路由器由窗口层注入（构造 SimulationState 的测试不该碰文件系统）。
+        # None = 没有 LLM，纯本地台词池，行为与 v0.1.7 完全一致（审计 A1）。
+        self.llm = None
+        self.dialogue_enabled = True
+        self.last_spoken = ""          # 上一句（喂给 LLM 当情境，「她刚才说过什么」）
         self.events = DialogueEvents()
         self.scale = 1.5
         self._drag_prev_point: tuple[float, float] | None = None
@@ -909,14 +914,44 @@ class SimulationState:
     # -- diagnostics -------------------------------------------------------
     # ---- 对话 / 事件（docs/PLAN-dialogue.md）------------------------------
     def _step_dialogue(self) -> None:
-        """每 tick：热重载检查 → 事件 → 抽池 → 推进显示。"""
+        """每 tick：热重载检查 → 收 LLM 回信 → 事件 → 说话 → 推进显示。
+
+        说话有两条来源，**只有在 LLM 真的启用时**才走第一条：
+
+        1. LLM：``request()`` 起后台请求，回信在后续 tick 的 ``poll()`` 里到；
+           失败（没 key / 断网 / 401 / 空回复）→ 当场退回本地池，不静默不弹窗。
+        2. 本地池：老路径，一行不动（关掉 LLM 时行为与 v0.1.7 相同）。
+        """
         self.lines.tick()
+
+        reply = self.llm.poll() if self.llm is not None else None
+        if reply is not None:
+            if reply.text:
+                self._say(reply.text)
+            else:
+                # LLM 这条路走不通 → 用同一事件抽一句本地台词（玩家不该面对沉默）
+                self._say(self.lines.next_line(self.appearance.key, reply.event))
+
         fired = self.events.tick(self.behaviour, self.dragging, self.kill.active)
         if fired:
-            line = self.lines.next_line(self.appearance.key, fired)
-            if line:
-                self.dialogue.start(line)
+            asked = False
+            if self.llm is not None and self.dialogue_enabled:
+                asked = self.llm.request(
+                    fired,
+                    last_line=self.last_spoken,
+                    mood=self.behaviour,
+                )
+            if not asked:
+                self._say(self.lines.next_line(self.appearance.key, fired))
         self.dialogue.step()
+
+    def _say(self, line: str | None) -> None:
+        """说一句（``None`` / 空串 = 这次不说话）。顺手记下"上一句"。"""
+        text = (line or "").strip()
+        if not text:
+            return
+        self.dialogue.start(text)
+        self.last_spoken = text
 
     def cancel_dialogue(self) -> None:
         """硬收起 + 清事件冷却（暂停 / 换角色时调，审计 A2/A3）。"""
@@ -962,6 +997,9 @@ class SimulationState:
             "dialogue": self.dialogue.to_dict(),
             "dialogue_events": self.events.to_dict(),
             "dialogue_pool": self.lines.state(),
+            # LLM 的状态（审计 A13）：没接路由器时也要有这个键，面板才能稳定取值
+            "llm": self.llm.state() if self.llm is not None
+            else {"enabled": False, "last_reason": "未接入"},
             "time": round(self.time, 2),
             "behaviour": self.behaviour,
             "drag": self.drag_mode,

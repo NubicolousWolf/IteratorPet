@@ -62,7 +62,9 @@ class LLMConfig:
     base_url: str = "https://api.deepseek.com"
     api_key: str = ""
     api_key_env: str = KEY_ENV
-    model: str = "deepseek-chat"
+    # 默认**留空**（用户 2026-10-30 拍板）：玩家忘了改模型时，宁可"没有模型、
+    # 一次都不发"，也不要悄悄把请求打到一个他没选的模型上。
+    model: str = ""
     context_window: int = 65536
     temperature: float = 1.1
     max_tokens: int = 120
@@ -201,7 +203,7 @@ class LLMStore:
             return self.config
         self.config = normalize(raw)
         if not self.config.model:
-            self.last_error = "llm.json 里没有 model，请在设置页选一个"
+            self.last_error = "还没选模型（设置页里「拉取模型」后选一个）"
         self.loaded_from_file = True
         return self.config
 

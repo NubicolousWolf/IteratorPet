@@ -1,0 +1,143 @@
+"""把"要不要说话"接到 LLM 上（P1 的收口一层）。
+
+分工非常窄，是故意窄的：
+
+* **主线程（仿真 tick）**：判断能不能问 → 组装 prompt（读文件很小）→ 起一个
+  ``BackgroundJob`` → 每 tick ``poll()`` 一次。从不阻塞。
+* **worker 线程**：只发 HTTP、只往队列里投一个 :class:`~.client.ChatResult`
+  （审计 A3：不碰 Qt、不碰仿真）。
+* **失败一律退回本地台词池**：没 key / 断网 / 401 / 空回复都只影响"这次说什么"，
+  绝不影响她动不动、绝不弹窗。
+
+关掉 LLM 时 :meth:`LLMRouter.request` 直接返回 ``False``，调用方照旧抽本地池——
+所以"关掉 = v0.1.7"在这条链路上是可验证的（``test_router_disabled_falls_back``）。
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from . import client as llm_client
+from . import config as llm_config
+from . import history as llm_history
+from . import models as llm_models
+from . import prompt as llm_prompt
+from . import worldbook as llm_worldbook
+
+
+@dataclass(frozen=True)
+class Reply:
+    """一次"该说话了"的结果。``source="pool"`` 表示这次没用 LLM。"""
+
+    text: str = ""
+    source: str = "pool"
+    event: str = ""
+    reason: str = ""
+
+
+class LLMRouter:
+    def __init__(
+        self,
+        store: llm_config.LLMStore,
+        character: str = "pebbles",
+        folder=None,
+        transport=None,
+        job_factory=None,
+    ):
+        self.store = store
+        self.character = character
+        self.folder = folder
+        self.client = llm_client.LLMClient(store, transport=transport)
+        self.chat = llm_history.ChatLog(character, folder=folder)
+        self.card = llm_prompt.Card()
+        self.book = llm_worldbook.Worldbook(
+            path=(folder / "worldbook.json") if folder else None
+        )
+        self._job_factory = job_factory or llm_models.BackgroundJob
+        self._job = None
+        self._pending: tuple[str, llm_prompt.Assembled] | None = None
+        self.last_reply = Reply()
+        self.last_debug: dict = {}
+        self.reload()
+
+    # -- 文件 ---------------------------------------------------------------
+    def reload(self) -> None:
+        """重读角色卡与世界书（设置页保存后 / 换角色时调）。"""
+        self.card, self.card_error = llm_prompt.load_card(self.character, self.folder)
+        self.book = llm_worldbook.Worldbook(
+            path=(self.folder / "worldbook.json") if self.folder else None
+        )
+        self.book.load()
+
+    def set_character(self, character: str) -> None:
+        if character == self.character:
+            return
+        self.character = character
+        self.chat = llm_history.ChatLog(character, folder=self.folder)
+        self.reload()
+
+    # -- 状态 ---------------------------------------------------------------
+    @property
+    def enabled(self) -> bool:
+        return self.client.enabled
+
+    @property
+    def busy(self) -> bool:
+        return self._job is not None
+
+    def state(self) -> dict:
+        data = self.client.state()
+        data.update(
+            {
+                "character": self.character,
+                "worldbook": self.book.state(),
+                "chats": self.chat.state(),
+                "pending": self.busy,
+                "last_source": self.last_reply.source,
+                "last_debug": self.last_debug,
+                "card_error": getattr(self, "card_error", ""),
+            }
+        )
+        return data
+
+    # -- 主线程：发一个请求 --------------------------------------------------
+    def request(self, event: str, *, last_line: str = "", mood: str = "",
+                distance: str = "") -> bool:
+        """能不能用 LLM 说话。返回 ``False`` 表示调用方照旧抽本地池。"""
+        if not self.enabled or self.busy:
+            return False
+        situation = llm_prompt.Situation(
+            event=event, mood=mood, distance=distance, last_line=last_line
+        )
+        assembled = llm_prompt.assemble(
+            self.card,
+            self.book,
+            self.store.config,
+            history=self.chat.recent(self.store.config.history_messages),
+            situation=situation,
+        )
+        self.last_debug = assembled.debug()
+        # 玩家这一侧先落盘：即使请求失败，"她听到过"这件事也算发生过
+        self.chat.append("user", situation.to_text())
+        self._pending = (event, assembled)
+        self._job = self._job_factory(self.client.ask, assembled.messages).start()
+        return True
+
+    # -- 主线程：每 tick 收一次 ----------------------------------------------
+    def poll(self) -> Reply | None:
+        """还没好 → ``None``；好了 → :class:`Reply`（失败时 ``text`` 为空）。"""
+        if self._job is None:
+            return None
+        result = self._job.poll()
+        if result is None:
+            return None
+        event, _assembled = self._pending or ("", None)
+        self._job = None
+        self._pending = None
+        if isinstance(result, llm_client.ChatResult) and result.ok and result.text:
+            self.chat.append("assistant", result.text)
+            self.last_reply = Reply(text=result.text, source="llm", event=event)
+        else:
+            reason = getattr(result, "reason", "") or "没有回复"
+            self.last_reply = Reply(text="", source="llm", event=event, reason=reason)
+        return self.last_reply

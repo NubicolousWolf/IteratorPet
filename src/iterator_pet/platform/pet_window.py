@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from ..config import SIZE_PRESETS, Config, load, save, scale_for
 from ..llm import config as llm_config
+from ..llm import templates as llm_templates
 from ..rendering.hit import hit_test
 from ..rendering.canvas import PetCanvas
 from ..simulation.state import SimulationState
@@ -73,9 +74,19 @@ class PetWindow(PetCanvas):
         # LLM 的连接与开关在独立的 llm.json（见 llm/config.py）；这里只持有读写器，
         # P1 阶段还没有任何 tick 级调用 —— 关掉时对仿真完全无影响（审计 A1 的前提）。
         self.llm = llm_config.LLMStore()
+        # 审计 A8：玩家要"自己改 JSON"，那就得第一次启动就能看见这些文件
+        llm_templates.ensure_template_files()
         self.llm.install_default_file()   # 先补模板再读，state() 的 exists 才不会骗人
         self.llm.load()
         self.dialogue_enabled = bool(getattr(config, 'dialogue_enabled', True))
+        # LLM 路由器交给仿真持有（仿真每 tick 用；这里只负责造出来和换角色）。
+        # 没 key / 没模型时 `router.enabled` 为假，仿真会走本地台词池，一行不差。
+        from ..llm.route import LLMRouter
+
+        self.simulation.llm = LLMRouter(
+            self.llm, character=self.simulation.appearance.key
+        )
+        self.simulation.dialogue_enabled = self.dialogue_enabled
         self.click_through = bool(config.click_through)
         self._paused = False
         self._press_global = None
@@ -376,12 +387,23 @@ class PetWindow(PetCanvas):
 
         self.llm.install_default_file()
         self.llm.load()
-        return show_settings(self.llm)
+        dialog = show_settings(self.llm)
+        # 保存后要把新的连接/开关交给路由器，并重读角色卡（玩家可能刚改过 JSON）
+        dialog.accepted.connect(self._reload_llm)
+        return dialog
+
+    def _reload_llm(self) -> None:
+        if self.simulation.llm is None:
+            return
+        self.simulation.llm.store = self.llm
+        self.simulation.llm.client.store = self.llm
+        self.simulation.llm.reload()
 
     def set_dialogue_enabled(self, enabled: bool) -> None:
         """托盘「对话」开关。关掉立刻收起当前这句。"""
         self.dialogue_enabled = bool(enabled)
         self.config.dialogue_enabled = bool(enabled)
+        self.simulation.dialogue_enabled = bool(enabled)   # 关掉后连 LLM 都不问
         if not enabled:
             self.simulation.cancel_dialogue()
         self.update()
@@ -407,6 +429,8 @@ class PetWindow(PetCanvas):
         self.simulation.cancel_dialogue()        # 换角色不许串台词（审计 A3）
         self.config.character = key
         self.simulation.appearance = CHARACTERS[key]
+        if self.simulation.llm is not None:
+            self.simulation.llm.set_character(key)      # 换角色 → 换角色卡与历史
         self.update()
         save(self.config)
 

@@ -240,7 +240,9 @@ class LLMSettingsDialog(QDialog):
         hints = []
         if not llm_config.has_key(cfg):
             hints.append("还没有 API Key：填上（或设环境变量）才能拉模型。")
-        if self.store.last_error:
+        if not cfg.model:
+            hints.append("还没选模型：先「拉取模型」再选一个（也可以直接手填名字）。")
+        if self.store.last_error and cfg.model:
             hints.append(self.store.last_error)
         self._set_status("；".join(hints) or "填好 key → 拉取模型 → 选一个 → 保存。")
 

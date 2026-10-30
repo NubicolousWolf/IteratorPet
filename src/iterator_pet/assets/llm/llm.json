@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "provider": "deepseek",
+  "protocol": "openai",
+  "base_url": "https://api.deepseek.com",
+  "api_key": "",
+  "api_key_env": "ITERATORPET_LLM_KEY",
+  "model": "",
+  "context_window": 65536,
+  "temperature": 1.1,
+  "max_tokens": 120,
+  "timeout_s": 8.0,
+  "allow_actions": false,
+  "file_drop": false,
+  "worldbook_budget": 800,
+  "history_messages": 10,
+  "action_cooldown_s": 2
+}

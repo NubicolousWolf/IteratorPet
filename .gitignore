@@ -33,7 +33,7 @@ config.json
 launcher.log
 # LLM 的配置与数据也在桌宠根目录。llm.json 里可能有**明文 api_key**，绝不能提交；
 # characters/ 与 chats/ 是玩家自己的角色卡和对话记录，同理。
-llm.json
-worldbook.json
-characters/
-chats/
+/llm.json
+/worldbook.json
+/characters/
+/chats/
