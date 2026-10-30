@@ -330,3 +330,26 @@ def test_debug_ask_refuses_when_disabled_or_empty(tmp_path):
                                                          "poll": lambda s: None})()
     assert router.request("talk") is True
     assert router.ask_text("在吗") is False, "上一条还没回来就不许插队"
+
+def test_the_reply_sequence_tells_new_replies_from_stale_ones(tmp_path):
+    """调试入口的 bug 现场：上一次失败的回执会一直躺在 last_reply 里。
+
+    光看 ``event == "debug"`` 分不出新旧，所以每条回执都带请求序号；
+    调用方只认 ``last_reply_seq == seq``。
+    """
+    router = _router(tmp_path, transport=FakeTransport({"choices": [{"message": {"content": "在。"}}]}))
+    assert router.seq == 0 and router.last_reply_seq == 0
+
+    assert router.ask_text("第一次") is True
+    first = router.seq
+    assert first == 1
+    assert router.last_reply_seq == 0, "还没回来，上一次的回执仍是 0"
+    router.poll()
+    assert router.last_reply_seq == first
+
+    assert router.ask_text("第二次") is True
+    second = router.seq
+    assert second == first + 1
+    assert router.last_reply_seq == first, "上一次的回执还挂着——这正是要防的"
+    router.poll()
+    assert router.last_reply_seq == second

@@ -63,6 +63,11 @@ class LLMRouter:
         self._job_factory = job_factory or llm_models.BackgroundJob
         self._job = None
         self._pending: tuple[str, llm_prompt.Assembled] | None = None
+        # 请求序号：调用方（调试入口）靠它认出"这条回执是不是我这次要的"。
+        # 没有它就只能看 last_reply.event，而上一次的失败回执会一直躺在那儿。
+        self.seq = 0
+        self._pending_seq = 0
+        self.last_reply_seq = 0
         self.last_reply = Reply()
         self.last_debug: dict = {}
         self.reload()
@@ -130,6 +135,8 @@ class LLMRouter:
         self.last_debug = assembled.debug()
         # 玩家这一侧先落盘：即使请求失败，"她听到过"这件事也算发生过
         self.chat.append("user", situation.to_text())
+        self.seq += 1
+        self._pending_seq = self.seq
         self._pending = (event, assembled)
         allow_actions = bool(self.store.config.allow_actions)
         self._job = self._job_factory(
@@ -156,6 +163,8 @@ class LLMRouter:
         )
         self.last_debug = assembled.debug()
         self.chat.append("user", text)
+        self.seq += 1
+        self._pending_seq = self.seq
         self._pending = (event, assembled)
         self._job = self._job_factory(
             self.client.ask, assembled.messages, bool(self.store.config.allow_actions)
@@ -171,6 +180,7 @@ class LLMRouter:
         if result is None:
             return None
         event, _assembled = self._pending or ("", None)
+        self.last_reply_seq = self._pending_seq      # 本次回执属于哪一个请求
         self._job = None
         self._pending = None
         if isinstance(result, llm_client.ChatResult) and result.ok:

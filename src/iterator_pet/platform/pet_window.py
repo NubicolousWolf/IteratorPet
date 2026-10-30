@@ -453,23 +453,63 @@ class PetWindow(PetCanvas):
         if not router.ask_text(text.strip()):
             QMessageBox.information(self, "给 LLM 发消息", "没发出去（关着或正在等回复）。")
             return
+        self._start_debug_watch(router.seq)
 
-        # 等回复：轮询 last_reply，拿到 event=="debug" 的那一条就弹窗收尾
+    # 等回执的上限。`llm.json` 的 timeout_s 默认 8 s，加上排队/重试留足余量。
+    DEBUG_WAIT_S = 35.0
+
+    def _start_debug_watch(self, seq: int) -> None:
+        """开始等**这一次**请求的回执。
+
+        两件必须做的事（都踩过）：
+        * 先把上一个计时器**停掉并销毁**，否则旧计时器会把后来的回执当成自己的，
+          一次发送弹出好几个框；
+        * 记住请求序号 ``seq``，只认 ``last_reply_seq == seq`` 的那条——
+          上一次失败的回执会一直躺在 ``last_reply`` 里，光看 event 认不出新旧。
+        """
+        old = getattr(self, "_debug_timer", None)
+        if old is not None:
+            old.stop()
+            old.deleteLater()
+        self._debug_seq = int(seq)
+        self._debug_deadline = time.monotonic() + self.DEBUG_WAIT_S
         self._debug_timer = QTimer(self)
         self._debug_timer.setInterval(120)
         self._debug_timer.timeout.connect(self._debug_reply_ready)
         self._debug_timer.start()
 
+    def _stop_debug_watch(self) -> None:
+        timer = getattr(self, "_debug_timer", None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+            self._debug_timer = None
+
     def _debug_reply_ready(self) -> None:
         from PySide6.QtWidgets import QMessageBox
 
+        # 计时器已经被停掉（正在弹框/已经收尾）→ 排队里的 timeout 直接忽略，
+        # 否则模态框的嵌套事件循环会把同一个回执再弹一次。
+        if getattr(self, "_debug_timer", None) is None:
+            return
         router = self.simulation.llm
-        if router is None or router.busy:
+        if router is None:
+            self._stop_debug_watch()
             return
+        expired = time.monotonic() >= getattr(self, "_debug_deadline", 0.0)
+        if router.busy or router.last_reply_seq != getattr(self, "_debug_seq", -1):
+            if not expired:
+                return
+            self._stop_debug_watch()
+            QMessageBox.information(
+                self, "给 LLM 发消息",
+                f"等了 {self.DEBUG_WAIT_S:.0f} 秒还没收到这次的回执。\n"
+                f"（模型={router.store.config.model or '未选'}，"
+                f"最近一次原因：{router.last_reply.reason or '无'}）",
+            )
+            return
+        self._stop_debug_watch()
         reply = router.last_reply
-        if reply is None or reply.event != "debug":
-            return
-        self._debug_timer.stop()
         lines = [reply.text or "（她没有说话）"]
         if reply.action:
             lines.append(f"动作：{reply.action}（已经进意图队列）")
