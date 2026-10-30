@@ -191,6 +191,7 @@ class SimulationState:
         self.intent_accepted = 0
         self.intent_rejected = 0
         self.intent_last = ""
+        self._intent_blocked: tuple[str, float] | None = None   # 正在被闸门挡着的那条
         self.cursor_speed = 0.0        # 本 tick 的光标速度（仿真 px/tick）
         # 仪式这一 tick 的结果（"flash" / "tremble_done" / "abort"），
         # 由 kill.step() 写入、由 _step_dialogue() 消费并清掉 —— 一次性事件。
@@ -519,16 +520,27 @@ class SimulationState:
         router = self.llm
         if router is None:
             return False
-        take = getattr(router, "take_intent", None)
-        intent = take() if take is not None else None
+        # 先"看一眼"再决定消费：闸门关着时**绝不能把动作扔掉**。
+        # 用户实测过这条 bug：回执带台词 → 气泡占着 → `正在说话` 拒了它 →
+        # 而 pop() 已经把它消费掉，于是"进了队列却没执行"。现在留在队里等下一 tick，
+        # 超过 INTENT_TTL_S（5 s）由队列自己丢，避免仪式/拖拽结束后突然迟到执行。
+        peek = getattr(router, "peek_intent", None)
+        intent = peek() if peek is not None else None
         if intent is None:
             return False
         action = intent.action
         refusal = self._intent_refusal(action)
         if refusal:
-            self.intent_rejected += 1
-            self.intent_last = f"{action}: {refusal}"
+            token = (action, float(getattr(intent, "at", 0.0)))
+            if self._intent_blocked != token:
+                self.intent_rejected += 1          # 一条动作只记一次，不每 tick 刷
+                self.intent_last = f"{action}: {refusal}"
+                self._intent_blocked = token
             return False
+        take = getattr(router, "take_intent", None)
+        if take is not None and take() is None:     # 真消费；取不到就当没发生
+            return False
+        self._intent_blocked = None
         if action == "tremble":
             self._begin_tremble()
             self.intent_accepted += 1

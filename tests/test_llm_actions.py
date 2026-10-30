@@ -122,7 +122,8 @@ def test_intent_queue_whitelists_and_cools_down():
     assert queue.push("fly") is False
     assert queue.push("talk", min_interval_s=2.0) is True
     assert queue.push("investigate", min_interval_s=2.0) is False, "2 s 内不许第二条"
-    assert queue.state() == {"pushed": 1, "dropped": 2}
+    assert queue.state()["pushed"] == 1 and queue.state()["dropped"] == 2
+    assert queue.state()["expired"] == 0, "还没人 peek/pop，不该有过期"
 
     clock[0] += 2.5
     assert queue.push("investigate", min_interval_s=2.0) is True
@@ -209,6 +210,9 @@ class StubRouter:
         self.allow_actions = allow_actions
         self.taken = 0
 
+    def peek_intent(self):
+        return self._intents[0] if self._intents else None
+
     def take_intent(self):
         self.taken += 1
         return self._intents.pop(0) if self._intents else None
@@ -268,3 +272,37 @@ def test_a_forced_action_is_not_taken_when_actions_are_off():
     sim.llm = stub
     assert sim._apply_intents() is False
     assert sim.intent_accepted == 0
+
+def test_an_action_waits_for_the_bubble_instead_of_being_dropped():
+    """用户实测：调试发来的动作「进了队列但没执行」。
+
+    原因链：回执带台词 → 气泡占着 → ``正在说话`` 闸门拒了它；而 ``pop()`` 已经把它
+    消费掉，于是这条动作**永远消失**。正确行为是「留在队列里等闸门打开」，
+    过期（TTL）才丢。
+    """
+    sim = _sim()
+    sim.cursor = (sim.creature.chunk0[0] + 20.0, sim.creature.chunk0[1])
+    sim.dialogue.start("在。")
+    sim.llm = StubRouter([llm_actions.Intent("investigate")])
+
+    assert sim._apply_intents() is False
+    assert sim.intent_rejected == 1
+    sim._apply_intents()                     # 同一 tick 再来一次
+    assert sim.intent_rejected == 1, "一条动作只记一次拒绝，别每 tick 刷"
+
+    sim.dialogue.text = ""                   # 气泡收了（下一 tick 的事）
+    assert sim._apply_intents() is False
+    assert sim.selector.behaviour == "investigate", "气泡一收就要执行"
+    assert sim.intent_accepted == 1
+
+
+def test_a_stale_action_expires_instead_of_firing_later():
+    """闸门一直不开（比如一直在仪式里）时，动作不能过很久突然执行。"""
+    clock = [0.0]
+    queue = llm_actions.IntentQueue(clock=lambda: clock[0], ttl_s=5.0)
+    assert queue.push("tremble", min_interval_s=0.0) is True
+    assert queue.peek() is not None
+
+    clock[0] = 6.0
+    assert queue.peek() is None, "过期就不给"
+    assert queue.pop() is None

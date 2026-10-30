@@ -203,6 +203,13 @@ class LLMRouter:
         return self.last_reply
 
     # -- 主线程：给仿真取一个动作 --------------------------------------------
+    def peek_intent(self) -> llm_actions.Intent | None:
+        """看一眼队首动作**不消费**——仿真每 tick 用它在闸门关着时"先别丢"。"""
+        if not self.enabled or not self.store.config.allow_actions:
+            self.intents.clear()
+            return None
+        return self.intents.peek()
+
     def take_intent(self) -> llm_actions.Intent | None:
         """取一条待执行的动作。总开关或"允许控制行动"关掉时**一条都不给**。"""
         if not self.enabled or not self.store.config.allow_actions:

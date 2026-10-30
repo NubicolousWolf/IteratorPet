@@ -25,6 +25,9 @@ from dataclasses import dataclass
 
 WHITELIST = ("investigate", "talk", "tremble", "idle")
 # 动作维持多久（tick，40 TPS）。investigate/talk 用现有段长；idle 用 roaming 段长。
+# 动作在队列里最多活 5 s：闸门关着时等它开，但不能过很久突然执行（仪式/拖拽可能持续很久）
+INTENT_TTL_S = 5.0
+
 ACTION_TICKS = {"investigate": 240, "talk": 900, "idle": 450}
 BEHAVIOUR_OF = {"investigate": "investigate", "talk": "talk", "idle": "roaming"}
 
@@ -185,6 +188,7 @@ def parse_json_fallback(text: str) -> ParsedReply:
 class Intent:
     action: str
     reason: str = ""
+    at: float = 0.0            # 入队时刻（monotonic），用来判过期
 
 
 class IntentQueue:
@@ -194,12 +198,14 @@ class IntentQueue:
     留最后一个才是它最新的意图。
     """
 
-    def __init__(self, clock=time.monotonic):
+    def __init__(self, clock=time.monotonic, ttl_s: float = INTENT_TTL_S):
         self._clock = clock
         self._slot: queue.Queue = queue.Queue(maxsize=1)
         self.last_action_at = -1e9
+        self.ttl_s = max(0.5, float(ttl_s))
         self.pushed = 0
         self.dropped = 0
+        self.expired = 0
 
     def push(self, action: str, reason: str = "", min_interval_s: float = 2.0) -> bool:
         name = _clean_action(action)
@@ -217,7 +223,7 @@ class IntentQueue:
             except queue.Empty:
                 break
         try:
-            self._slot.put_nowait(Intent(name, reason))
+            self._slot.put_nowait(Intent(name, reason, now))
         except queue.Full:                # pragma: no cover - maxsize=1 且已清空
             self.dropped += 1
             return False
@@ -225,14 +231,48 @@ class IntentQueue:
         return True
 
     def pop(self) -> Intent | None:
+        """取一条；**过期的直接丢**（否则闸门一直不开时会迟到执行）。"""
+        while True:
+            item = self._take()
+            if item is None:
+                return None
+            if self._too_old(item):
+                self.expired += 1
+                continue
+            return item
+
+    def peek(self) -> Intent | None:
+        """看一眼**不消费**。
+
+        为什么需要它：闸门（仪式中/拖拽中/正在说话）关着的时候不能把动作扔掉——
+        用户实测过"回复进了队列，桌宠却没动"：回执带台词 → 气泡占着 → 拒一次就没了。
+        正确做法是留在队里等下一 tick，过期（``ttl_s``）才丢。
+        """
+        item = self._take()
+        if item is None:
+            return None
+        if self._too_old(item):
+            self.expired += 1
+            return None
+        try:
+            self._slot.put_nowait(item)      # 原样放回去（单线程：poll 在主线程）
+        except queue.Full:                   # pragma: no cover - maxsize=1 且刚取出
+            pass
+        return item
+
+    def _take(self) -> Intent | None:
         try:
             return self._slot.get_nowait()
         except queue.Empty:
             return None
+
+    def _too_old(self, item: Intent) -> bool:
+        return (self._clock() - float(getattr(item, "at", 0.0))) > self.ttl_s
 
     def clear(self) -> None:
         while self.pop() is not None:
             pass
 
     def state(self) -> dict:
-        return {"pushed": self.pushed, "dropped": self.dropped}
+        return {"pushed": self.pushed, "dropped": self.dropped,
+                "expired": self.expired, "ttl_s": self.ttl_s}

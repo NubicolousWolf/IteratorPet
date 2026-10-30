@@ -512,7 +512,10 @@ class PetWindow(PetCanvas):
         reply = router.last_reply
         lines = [reply.text or "（她没有说话）"]
         if reply.action:
-            lines.append(f"动作：{reply.action}（已经进意图队列）")
+            lines.append(
+                f"动作：{reply.action}（已进意图队列；若当时正在说话/拖拽/仪式中，"
+                f"会在 5 秒内等闸门打开后执行）"
+            )
         if reply.reason:
             lines.append(f"原因：{reply.reason}")
         QMessageBox.information(self, "她的回复", "\n".join(lines))
