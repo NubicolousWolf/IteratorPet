@@ -146,6 +146,10 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
         )
         character_menu.addAction(action_character)
 
+    action_workshop = QAction("迭代器自定义…", menu)
+    action_workshop.triggered.connect(window.open_workshop)
+    menu.addAction(action_workshop)
+
     action_edit_lines = QAction("自定义对话", menu)
     action_edit_lines.triggered.connect(window.open_dialogue_editor)
     menu.addAction(action_edit_lines)

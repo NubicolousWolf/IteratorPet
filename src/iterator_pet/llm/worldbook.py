@@ -15,13 +15,21 @@ from __future__ import annotations
 
 import json
 import random
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 LOGICS = ("AND_ANY", "AND_ALL", "NOT_ANY", "NOT_ALL")
 POSITIONS = ("before_char_defs", "after_char_defs", "at_depth", "top")
 PLACEHOLDER = "（待填"
+
+# 保存时的夹取范围（工作室的输入框照着这几个数设上下限，文件里也照它夹）。
+SCAN_DEPTH_LIMIT = 20
+BUDGET_LIMIT = 8000
+DEPTH_LIMIT = 99
+ORDER_LIMIT = 9999
 
 # 正则 key 的三道护栏（审计：正则 key 的 ReDoS）
 MAX_PATTERN = 120
@@ -52,6 +60,25 @@ class Entry:
         """能不能参与匹配：得有正文，且不是模板里的占位。"""
         text = (self.content or "").strip()
         return bool(text) and not text.startswith(PLACEHOLDER)
+
+    def to_dict(self) -> dict:
+        """写回文件用的形状。键名照**文件约定**（`selective_logic`），不是字段名（`logic`）。
+
+        只输出已知字段；未知字段由 :meth:`Worldbook.save` 按 `id` 合并回去。
+        """
+        return {
+            "id": self.id,
+            "comment": self.comment,
+            "keys": list(self.keys),
+            "secondary_keys": list(self.secondary_keys),
+            "selective_logic": self.logic,
+            "constant": bool(self.constant),
+            "position": self.position,
+            "depth": max(0, min(DEPTH_LIMIT, int(self.depth))),
+            "order": max(-ORDER_LIMIT, min(ORDER_LIMIT, int(self.order))),
+            "probability": max(0, min(100, int(self.probability))),
+            "content": self.content,
+        }
 
 
 def _as_list(value) -> tuple[str, ...]:
@@ -269,6 +296,105 @@ class Worldbook:
             "loaded_from_file": self.loaded_from_file,
             "last_error": self.last_error,
         }
+
+    # -- 保存（工作室用）----------------------------------------------------
+    def to_document(self) -> dict:
+        """当前内存状态 → 文件字典（不含未知键；合并交给 :meth:`save`）。"""
+        return {
+            "version": 1,
+            "scan_depth": max(0, min(SCAN_DEPTH_LIMIT, int(self.scan_depth))),
+            "token_budget": max(0, min(BUDGET_LIMIT, int(self.token_budget))),
+            "recursive": 1 if int(self.recursive) else 0,
+            "match_whole_words": bool(self.whole_words),
+            "entries": [entry.to_dict() for entry in self.entries],
+        }
+
+    def save(self, force: bool = False) -> bool:
+        """原子写回 ``worldbook.json``。
+
+        三条规矩和 ``llm/config.py::save`` 一样，另加一条**这条链路特有**的：
+
+        * 顶层未知键、每条条目的未知字段**原样保留**（玩家/未来版本可能加了东西）；
+          条目按 ``id`` 对齐，没有 ``id`` 的旧条目按顺序对齐；
+        * 写前夹取（扫描深度/预算/概率/order），文件是给玩家看的合同；
+        * **非空但解析不了的旧文件不静默覆盖**：``force=False`` 时直接失败并在
+          ``last_error`` 里说明，由界面问玩家"要不要覆盖"；确认后传 ``force=True``
+          （那一步会先留一份 ``.bak``）。
+
+        返回 ``True`` = 真写成功了。
+        """
+        previous: dict = {}
+        broken = False
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            text = ""
+        except OSError as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return False
+        if text.strip():
+            try:
+                loaded = json.loads(text)
+                if isinstance(loaded, dict):
+                    previous = loaded
+                else:
+                    broken = True
+            except ValueError:
+                broken = True
+        if broken and not force:
+            self.last_error = (
+                "worldbook.json 现在不是合法 JSON；直接保存会覆盖掉你的原文，"
+                "所以先停下了（确认覆盖会留一份 .bak）"
+            )
+            return False
+        if broken and force:
+            try:
+                self.path.with_suffix(self.path.suffix + ".bak").write_text(
+                    text, encoding="utf-8"
+                )
+            except OSError:
+                pass
+
+        # 按 id（其次按顺序）把未知字段并回去
+        old_entries = previous.get("entries")
+        old_entries = old_entries if isinstance(old_entries, list) else []
+        by_id: dict[str, dict] = {}
+        anonymous: list[dict] = []
+        for item in old_entries:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("id") or "")
+            if key:
+                by_id[key] = item
+            else:
+                anonymous.append(item)
+        document = self.to_document()
+        merged: list[dict] = []
+        for index, entry in enumerate(self.entries):
+            base = by_id.get(entry.id)
+            if base is None and not entry.id and index < len(anonymous):
+                base = anonymous[index]
+            payload = dict(base or {})
+            payload.update(entry.to_dict())
+            merged.append(payload)
+        document["entries"] = merged
+
+        previous.update(document)          # 顶层未知键保留，已知键以本次为准
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            handle, tmp = tempfile.mkstemp(
+                dir=str(self.path.parent), prefix=".worldbook-", suffix=".json"
+            )
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                json.dump(previous, stream, ensure_ascii=False, indent=2)
+                stream.write("\n")
+            Path(tmp).replace(self.path)
+        except OSError as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return False
+        self.last_error = ""
+        self.loaded_from_file = True
+        return True
 
 
 def _default_path() -> Path:

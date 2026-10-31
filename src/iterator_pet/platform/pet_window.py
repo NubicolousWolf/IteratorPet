@@ -363,6 +363,22 @@ class PetWindow(PetCanvas):
 
         self._dialogue_editor = show_editor(self.simulation.lines)
 
+    def open_workshop(self) -> None:
+        """打开「迭代器自定义」工作室（人偶外观 / 角色卡 / 世界书 三合一）。
+
+        v0.1.9 的范围：三个页签都能**真读写**磁盘上的 `characters/*.json` 与
+        `worldbook.json`；人偶页的配色与像素头饰存进角色的 `extensions.rainworld.appearance`
+        并在页内预览，**但还不会应用到桌面人偶**（那是 v0.2.0）。
+
+        保存后调 `_reload_llm()`：世界书与角色卡都是路由器下一句话就要用的东西，
+        不重载就等于"改了没生效"。
+        """
+        from .workshop import show_workshop
+
+        router = self.simulation.llm
+        book = getattr(router, "book", None) if router is not None else None
+        self._workshop = show_workshop(book=book, folder=None, on_saved=self._reload_llm)
+
     def open_data_folder(self) -> None:
         """打开数据文件夹（打包版 = 启动.exe 旁边；只读介质下才是 `%LOCALAPPDATA%`）。
 
@@ -752,6 +768,10 @@ class PetWindow(PetCanvas):
                 lambda _checked=False, name=key: self.set_character(name)
             )
             character_menu.addAction(action_character)
+
+        action_workshop = QAction("迭代器自定义…", menu)
+        action_workshop.triggered.connect(self.open_workshop)
+        menu.addAction(action_workshop)
 
         action_edit_lines = QAction("自定义对话", menu)
         action_edit_lines.triggered.connect(self.open_dialogue_editor)

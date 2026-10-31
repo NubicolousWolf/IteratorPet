@@ -20,10 +20,12 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QImage,
     QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
     QPolygonF,
     QRadialGradient,
 )
@@ -163,13 +165,13 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
     #      · 端点落在最外圈 bit 的外缘，真正"接上"光环
     # 端点接**内圈环**（ring 0）：电光画在最底层，被环和 bit 盖住，视觉上就是"扎进光环里"。
     spark_radius = (C.HALO_RADIUS_BASE + push) * expand * 10.0 + 1.0
-    spark_base = QColor(min(255, int(state.appearance.halo[0] * gain)),
-                        min(255, int(state.appearance.halo[1] * gain)),
-                        min(255, int(state.appearance.halo[2] * gain)))
+    # 电光颜色**独立于光环**（2026-10-31 接通）：以前这里写死 `halo × 1.05`，
+    # 于是 `Appearance.halo_spark` 是个从没被读过的死字段，玩家想"环暖电光冷"做不到。
+    # 两个内置角色的默认值就是原来实际画出来的颜色，所以观感零变化。
     spark_colour = QColor(
-        min(255, int(spark_base.red() * 1.05)),
-        min(255, int(spark_base.green() * 1.05)),
-        min(255, int(spark_base.blue() * 1.05)),
+        min(255, int(state.appearance.halo_spark[0] * gain)),
+        min(255, int(state.appearance.halo_spark[1] * gain)),
+        min(255, int(state.appearance.halo_spark[2] * gain)),
         int(255 * C.HALO_OPACITY),
     )
     painter.setPen(Qt.PenStyle.NoPen)
@@ -988,6 +990,10 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     )
     painter.drawPixmap(QRectF(chin_c[0] - chin * 0.5, chin_c[1] - chin * 0.5, chin, chin), sprite, QRectF(sprite.rect()))
 
+    # 自定义像素头饰在**眼睛之前**：它是头壳装饰，源码那两只眼要盖在它上面
+    # （见 draw_headpiece 的说明）。
+    draw_headpiece(painter, state)
+
     # EyeSprite: 1x1 `pixel` at head + perp*clamp(look.x*3 + 2.5*sign, -5, 5)
     # + axis*(1 - look.y*3), rotated onto the body axis. og.cs:2168 sets
     # scaleX = 1 + InverseLerp(...) + (1 - eyesOpen), og.cs:2169 sets
@@ -1009,6 +1015,57 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
 
     # og.cs:2238 第三只眼在头和两只眼之后画
     draw_third_eye(painter, state)
+
+
+def draw_headpiece(painter: QPainter, state: RenderState) -> None:
+    """自定义像素头顶部件（玩家在工作室里画的，``Appearance.headpiece``）。
+
+    为什么单独一个函数、而且**画在眼睛之前**：
+
+    * 它是"头壳装饰"，比头本身大（24×20 格 × 0.5 = 12×10 仿真 px，盖住 11.1×9.1 的头），
+      所以必须先画，让源码那两只眼**盖在它上面**继续盯着光标 —— 这是"自定义"和
+      "还活着"之间唯一不用二选一的位置（docs/PLAN-custom-iterator.md §3.7 方案 B）。
+    * 每帧现拼一张 ``w×h`` 的 ``QImage`` 再放大：24×20 最多 480 个像素，代价可忽略，
+      换掉的是"QPixmap 缓存什么时候失效"这一整类 bug。只有装了头饰才会执行到这里。
+    """
+    art = state.appearance.headpiece
+    if art is None or art.is_empty():
+        return
+    axis = C.dir_vec(state.head, state.body0)
+    perp = (axis[1], -axis[0])
+    look = face_look(state.look_dir, axis)
+    # 视差幅度 1 px（源码第三只眼是 2.5，但那是 4 px 的小圆点；玩家画的图案大得多，
+    # 同样的位移会显得在脑门上乱滑）。
+    cx = state.head[0] + perp[0] * (look[0] * 1.0)
+    cy = state.head[1] + perp[1] * (look[0] * 1.0)
+    cell = float(state.appearance.headpiece_scale or 0.5)
+
+    image = QImage(art.w, art.h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    for y in range(art.h):
+        row = art.pixels[y]
+        for x in range(art.w):
+            colour = row[x]
+            if colour is None:
+                continue
+            image.setPixelColor(x, y, QColor(colour))
+    pixmap = QPixmap.fromImage(image)
+
+    painter.save()
+    painter.translate(QPointF(cx, cy))
+    # **+180°**：头精灵在体轴竖直时是 180°（`HeadSprite` 那条注释：宽椭圆、局部 x 轴水平），
+    # 玩家在画板上画的是"正着看的脸"。不补这个 180，玩家画的上角会出现在下巴上
+    # （2026-10-31 实测：一对一称的角在预览里整体倒过来）。补上之后静止时画板 = 屏幕，
+    # 躯干倾斜时头饰仍跟着头一起转。
+    painter.rotate(degrees(atan2(axis[0], -axis[1])) + 180.0)
+    width = art.w * cell
+    height = art.h * cell
+    painter.drawPixmap(
+        QRectF(-width * 0.5, -height * 0.5, width, height),
+        pixmap,
+        QRectF(pixmap.rect()),
+    )
+    painter.restore()
 
 
 def draw_third_eye(painter: QPainter, state: RenderState) -> None:
