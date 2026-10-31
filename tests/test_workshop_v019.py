@@ -705,6 +705,84 @@ def test_the_antenna_points_outward_not_inward():
     )
 
 
+def test_the_antenna_art_has_no_antialiased_seams():
+    """用户 2026-10-31：「预览图里还是有网格」。
+
+    画布和特写预览都开着 ``Antialiasing``。天线以前是**逐格 fillRect**，每一格的边缘
+    都被抗锯齿混一次，实心区域内部就浮出一条条暗线（实测 ``#ff8800×2 / #de7803×1 / …``）。
+    现在整张图画成一张 pixmap 并关掉抗锯齿，判据是**像素个数正好等于理论值**：
+    只要出现一条混色缝，纯色像素就会少。
+    """
+    from PySide6.QtGui import QColor, QImage, QPainter
+    import dataclasses
+    from iterator_pet.platform.puppet_tab import BOARD_ANCHORS, BOARD_SIZES
+    from iterator_pet.rendering import renderer as renderer
+    from iterator_pet.simulation import constants as constants
+    from iterator_pet.simulation.state import SimulationState
+
+    cell = 0.5
+    colour = "#ff8800"
+    col, row = BOARD_ANCHORS["antenna"]
+    art = PixelArt.blank(*BOARD_SIZES["antenna"])
+    # 一整条实心块，放在耳麦**外侧**（脑袋和眼睛碰不到的地方）
+    block_w, block_h = 6, 10
+    for y in range(int(row) - block_h - 1, int(row) - 1):
+        for x in range(int(col) - 3, int(col) - 3 + block_w):
+            art.set(x, y, colour)
+
+    sim = SimulationState((0.0, 0.0, 260.0, 300.0), warmup=0, character="pebbles")
+    for _ in range(140):
+        sim.step(1.0 / constants.GAME_HZ)
+    appearance = ap.build_appearance("probe", "pebbles", {
+        "antenna_pixels": art.to_dict(),
+        "antenna_anchor": list(BOARD_ANCHORS["antenna"]),
+        "antenna_scale": cell,
+        "headpiece_mode": "none",
+    })
+    state = dataclasses.replace(sim.interpolate(1.0), look_dir=(0.0, 0.0),
+                                appearance=appearance)
+
+    zoom = 12.0
+    image = QImage(460, 460, QImage.Format.Format_ARGB32)
+    image.fill(QColor("#000000"))
+    painter = QPainter(image)
+    # 和 PetCanvas / PuppetPreview 一样开着抗锯齿 —— 缝就是它混出来的
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+    painter.translate(230 - state.head[0] * zoom, 230 - state.head[1] * zoom)
+    painter.scale(zoom, zoom)
+    renderer.draw_puppet_head(painter, state)
+    painter.end()
+
+    # 判据：穿过实心块**中线的横/竖两条扫描线必须连续**。
+    # （块是倾斜的，包围盒四角本来就有背景色，所以不能整盒比对；缝的特征正是
+    #   "2 个纯色 + 1 个混色"交替，任何一条中线被切断就说明有缝。）
+    points = [(x, y) for y in range(image.height()) for x in range(image.width())
+              if image.pixelColor(x, y).name() == colour]
+    assert points, "实心块根本没画出来"
+    xs = sorted({p[0] for p in points})
+    gap = max(range(len(xs) - 1), key=lambda k: xs[k + 1] - xs[k])
+    split = (xs[gap] + xs[gap + 1]) * 0.5          # 左右两条块之间的空当
+    for side in ([p for p in points if p[0] < split],
+                 [p for p in points if p[0] > split]):
+        assert side, "有一侧的块不见了"
+        x0 = min(p[0] for p in side); x1 = max(p[0] for p in side)
+        y0 = min(p[1] for p in side); y1 = max(p[1] for p in side)
+        ymid = (y0 + y1) // 2
+        row = [x for x in range(x0, x1 + 1)
+               if image.pixelColor(x, ymid).name() == colour]
+        assert row and max(row) - min(row) + 1 == len(row), (
+            f"实心块横向中线有断口（{len(row)} 个纯色像素跨 {max(row) - min(row) + 1} 列）"
+            "—— 抗锯齿又把它混花了"
+        )
+        xmid = (x0 + x1) // 2
+        col = [y for y in range(y0, y1 + 1)
+               if image.pixelColor(xmid, y).name() == colour]
+        assert col and max(col) - min(col) + 1 == len(col), (
+            f"实心块纵向中线有断口（{len(col)} 个纯色像素跨 {max(col) - min(col) + 1} 行）"
+        )
+
+
 def test_the_board_background_can_be_changed_from_the_toolbar(tmp_path):
     """画板底色可改（用户 2026-10-31：默认深色会和深色部件糊在一起看不清）。
 

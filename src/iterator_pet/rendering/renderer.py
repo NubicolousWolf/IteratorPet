@@ -1014,8 +1014,9 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     # 画的话，画板 2026-10-31 扩进来的"半个脑袋"区域里画什么都会被头整个盖住 ——
     # 画板上有、屏幕上没有，是最难解释的一类谎。眼睛仍在后面画，所以她照样盯着你。
     if custom:
+        pixmap = _art_pixmap(art, flip_y=True)   # 一张图两侧共用：只拼一次
         for sign, cx, cy, aim in pods:
-            draw_antenna_art(painter, ap, art, sign, cx, cy, aim)
+            draw_antenna_art(painter, ap, art, pixmap, sign, cx, cy, aim)
 
     # EyeSprite: 1x1 `pixel` at head + perp*clamp(look.x*3 + 2.5*sign, -5, 5)
     # + axis*(1 - look.y*3), rotated onto the body axis. og.cs:2168 sets
@@ -1040,19 +1041,22 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     draw_third_eye(painter, state)
 
 
-def draw_antenna_art(painter: QPainter, appearance, art, sign: float,
+def draw_antenna_art(painter: QPainter, appearance, art, pixmap, sign: float,
                      cx: float, cy: float, aim: float) -> None:
     """把玩家画的天线图摆到某一侧（**整条**：耳麦 + 内圈 + 触角，一张图左右镜像）。
 
-    **逐像素摆位置，不做整图缩放/翻转**：这块被"上下颠倒"坑了三次
-    （2026-10-31 用户报了两次），宁可用几百次 ``fillRect`` 换掉一整类朝向 bug。
-    画板约定：**顶部是触角尖、底部是内侧**（与屏幕朝向一致）。
+    **整张 pixmap 一次画完**，不再逐格 ``fillRect``（2026-10-31 用户报"预览里还有网格"）：
+    画布和特写预览都开着 ``Antialiasing``，逐格画时每一格的边缘都会被混一次，
+    实心区域内部就出现一条条暗线（实测 ``#ff8800×2 / #de7803×1 / …``）。
+    一张图 + 关掉抗锯齿 + 关掉平滑采样 = 像素画该有的硬边，顺带把每帧 700 次
+    ``fillRect`` 降成 1 次 ``drawPixmap``。
 
     三个必须记牢的点：
 
     * 圆心用 ``antenna_anchor``：新画板偏心（6, 24），第一版的 12×29 走居中约定，
       两种都要落在**原来的**屏幕像素上；
-    * ``oy = (anchor_row - row) * cell``：行号越大越靠内，而局部 +y 朝外，所以取负号；
+    * ``pixmap`` 是**行序上下翻转**过的（`_art_pixmap(..., flip_y=True)`）：画板行号越大越靠内，
+      而局部 +y 朝外；
     * ``sign < 0`` 时 ``scale(-1, 1)``：只在自定义图上镜像（源码那两个圆不镜像）。
     """
     cell = float(appearance.antenna_scale or 0.5)
@@ -1062,35 +1066,41 @@ def draw_antenna_art(painter: QPainter, appearance, art, sign: float,
     painter.rotate(aim)
     if sign < 0:
         painter.scale(-1.0, 1.0)                # 左右镜像**只管自定义图**
-    painter.setPen(Qt.PenStyle.NoPen)
-    for row in range(art.h):
-        oy = (anchor_row - row) * cell
-        line = art.pixels[row]
-        for col in range(art.w):
-            colour = line[col]
-            if colour is None:
-                continue
-            painter.fillRect(
-                QRectF((col - anchor_col) * cell, oy, cell, cell), QColor(colour)
-            )
+    # 像素画不许抗锯齿：这一句是"预览里的网格"的根治（逐格画时它会把每格边缘混暗）
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+    painter.drawPixmap(
+        QRectF(
+            -anchor_col * cell,
+            (anchor_row - art.h + 1) * cell,
+            art.w * cell,
+            art.h * cell,
+        ),
+        pixmap,
+        QRectF(pixmap.rect()),
+    )
     painter.restore()
 
 
-def _art_pixmap(art):
+def _art_pixmap(art, flip_y: bool = False):
     """``PixelArt`` → ``QPixmap``（1 格 = 1 像素，交给 drawPixmap 放大）。
 
     每次现拼：24×20 最多 480 次 ``setPixelColor``，代价可以忽略，换来的是
     "QPixmap 缓存什么时候失效"这一整类 bug 不存在。只有玩家装了自定义部件才会走到。
+
+    ``flip_y``：天线画板的行号**越大越靠内**（局部 +y 朝外），所以它的图要先上下翻一次，
+    才能用"左上角对齐"的普通 drawPixmap 摆到正确位置。
     """
     image = QImage(art.w, art.h, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)
     for y in range(art.h):
         row = art.pixels[y]
+        target_y = (art.h - 1 - y) if flip_y else y
         for x in range(art.w):
             colour = row[x]
             if colour is None:
                 continue
-            image.setPixelColor(x, y, QColor(colour))
+            image.setPixelColor(x, target_y, QColor(colour))
     return QPixmap.fromImage(image)
 
 
@@ -1120,6 +1130,9 @@ def draw_headpiece(painter: QPainter, state: RenderState) -> None:
     pixmap = _art_pixmap(art)
 
     painter.save()
+    # 像素画不许抗锯齿（否则每格边缘被混一条暗线，实心区域看着像网格）
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
     painter.translate(QPointF(cx, cy))
     # **+180°**：头精灵在体轴竖直时是 180°（`HeadSprite` 那条注释：宽椭圆、局部 x 轴水平），
     # 玩家在画板上画的是"正着看的脸"。不补这个 180，玩家画的上角会出现在下巴上
