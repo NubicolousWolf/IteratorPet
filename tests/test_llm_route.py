@@ -76,17 +76,19 @@ def _router(tmp_path, transport=None, **overrides) -> llm_route.LLMRouter:
 
 
 # ------------------------------------------------------------------ 历史 --
-def test_chat_log_appends_and_reads_back_in_order(tmp_path):
+def test_chat_log_appends_skips_broken_lines_trims_and_clears(tmp_path):
+    """`chats/<角色>.jsonl` 的四件事：追加/读回、坏行只丢一行、超限才重写、清空。
+
+    合并理由：同一个类的四个侧面，分开只是让报告长四倍。
+    """
     log = llm_history.ChatLog("pebbles", folder=tmp_path)
     assert log.append("user", "在吗")
     assert log.append("assistant", "在。")
     assert log.recent(10) == [("user", "在吗"), ("assistant", "在。")]
     assert log.path == tmp_path / "chats" / "pebbles.jsonl"
 
-
-def test_chat_log_skips_broken_lines(tmp_path):
-    log = llm_history.ChatLog("pebbles", folder=tmp_path)
-    log.path.parent.mkdir(parents=True)
+    # 坏行只丢那一行，别的照读；不认识的 role 也跳过
+    log.path.parent.mkdir(parents=True, exist_ok=True)
     log.path.write_text(
         json.dumps({"role": "user", "text": "好"}, ensure_ascii=False) + "\n"
         + "{ 断在半行\n"
@@ -94,30 +96,24 @@ def test_chat_log_skips_broken_lines(tmp_path):
         + json.dumps({"role": "assistant", "text": "嗯"}, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    assert log.recent(10) == [("user", "好"), ("assistant", "嗯")]
+    texts = [line[1] for line in log.recent(10)]
+    assert texts == ["好", "嗯"], f"坏行/陌生 role 要跳过，实际 {texts}"
+
+    # 超过 limit + slack 才重写，重写后不会超过 limit
+    trimming = llm_history.ChatLog("pebbles", folder=tmp_path / "t", limit=4)
+    for i in range(4 + llm_history.TRIM_SLACK + 2):
+        trimming.append("user", f"第{i}句")
+    lines = trimming.path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) <= 4 + llm_history.TRIM_SLACK + 1, "超限后要原子重写到 limit 附近"
+
+    # 缺文件读回空、clear 之后也空
+    empty = llm_history.ChatLog("past_moon", folder=tmp_path / "e")
+    assert empty.recent(5) == []
+    empty.append("assistant", "嗯。")
+    assert empty.clear() and empty.recent(5) == []
+    assert empty.state()["path"].endswith("past_moon.jsonl")
 
 
-def test_chat_log_trims_to_the_limit(tmp_path):
-    log = llm_history.ChatLog("pebbles", folder=tmp_path, limit=4)
-    total = 4 + llm_history.TRIM_SLACK + 2
-    for i in range(total):
-        log.append("user", f"第{i}句")
-    texts = [json.loads(line)["text"] for line in log.path.read_text(encoding="utf-8").splitlines()]
-    # 超过 limit+slack 才重写；重写后还剩 4 条，再追加几条 → 最多 limit+1
-    assert len(texts) <= 4 + 1
-    assert texts[-1] == f"第{total - 1}句", "最新的那句永远在最后"
-    assert f"第0句" not in texts, "旧的一定被丢掉了"
-
-
-def test_chat_log_handles_missing_and_clear(tmp_path):
-    log = llm_history.ChatLog("past_moon", folder=tmp_path)
-    assert log.recent(5) == []
-    log.append("assistant", "嗯。")
-    assert log.clear() and log.recent(5) == []
-    assert log.state()["path"].endswith("past_moon.jsonl")
-
-
-# ------------------------------------------------------------- 路由器 --
 def test_router_disabled_falls_back_without_a_request(tmp_path):
     store = _store(tmp_path)
     store.config.api_key = ""

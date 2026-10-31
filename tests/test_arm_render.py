@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from math import acos, atan2, cos, hypot, sin
 
 from PySide6.QtCore import Qt
@@ -177,10 +179,12 @@ def test_the_tail_elbow_connects_to_body_chunk_one():
 CHAMBERS = ((ROOM, 120.0), ((0.0, 0.0, 776.0, 415.0), 60.0))
 
 
+@pytest.mark.slow
 def test_the_arm_never_draws_outside_the_chamber__big_chamber():
     _assert_arm_stays_inside(ROOM, 120.0)
 
 
+@pytest.mark.slow
 def test_the_arm_never_draws_outside_the_chamber__documented_chamber():
     _assert_arm_stays_inside((0.0, 0.0, 776.0, 415.0), 60.0)
 

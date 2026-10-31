@@ -46,10 +46,11 @@ _OPEN: list["Workshop"] = []
 
 class Workshop(QDialog):
     def __init__(self, book: llm_worldbook.Worldbook | None = None,
-                 folder: Path | str | None = None, on_saved=None):
+                 folder: Path | str | None = None, on_saved=None, config=None):
         super().__init__(None)
         self.folder = Path(folder) if folder is not None else None
         self.on_saved = on_saved
+        self.config = config
         self.book = book or llm_worldbook.Worldbook(
             self.folder / "worldbook.json" if self.folder else None
         )
@@ -83,7 +84,7 @@ class Workshop(QDialog):
         outer.addLayout(top)
 
         self.tabs = QTabWidget()
-        self.puppet_tab = PuppetTab(self.folder)
+        self.puppet_tab = PuppetTab(self.folder, config=self.config)
         self.card_tab = CardTab(self.folder)
         self.worldbook_tab = WorldbookTab(self.book)
         self.tabs.addTab(self.puppet_tab, "人偶外观")
@@ -202,10 +203,10 @@ class Workshop(QDialog):
         event.accept()
 
 
-def show_workshop(book=None, folder=None, on_saved=None) -> Workshop:
+def show_workshop(book=None, folder=None, on_saved=None, config=None) -> Workshop:
     """打开（或复用）一个工作室窗口；引用留在模块里，防止被 Python 回收。"""
     global _OPEN
-    workshop = Workshop(book=book, folder=folder, on_saved=on_saved)
+    workshop = Workshop(book=book, folder=folder, on_saved=on_saved, config=config)
     _OPEN.append(workshop)
 
     def _forget(*_args) -> None:

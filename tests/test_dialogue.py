@@ -258,32 +258,30 @@ def test_state_reports_path_existence_and_entries(tmp_path):
 # --------------------------------------------------------------------------
 # 数据目录：**桌宠根目录**优先（用户 2026-10-30：别往 C 盘写）
 # --------------------------------------------------------------------------
-def test_pool_path_prefers_the_app_dir(tmp_path):
+def _pool_paths(tmp_path):
+    return tmp_path / "app" / "lines.json", tmp_path / "legacy" / "lines.json"
+
+
+def test_pool_path_prefers_app_dir_migrates_legacy_and_falls_back(tmp_path):
+    """台词文件放哪：桌宠根目录优先；老位置有内容要搬过来；根目录不可写才退回老位置。
+
+    合并理由：同一个函数的三个分支，一条用例遍历即可。
+    """
     from iterator_pet.simulation.lines import pick_pool_path
 
     app = tmp_path / "app" / "lines.json"
     legacy = tmp_path / "legacy" / "lines.json"
-    assert pick_pool_path(app, legacy, lambda _: True) == app
+    assert pick_pool_path(app, legacy, lambda _: True) == app, "根目录优先"
 
-
-def test_pool_path_migrates_the_legacy_file(tmp_path):
-    from iterator_pet.simulation.lines import pick_pool_path
-
-    app = tmp_path / "app" / "lines.json"
-    legacy = tmp_path / "legacy" / "lines.json"
     legacy.parent.mkdir(parents=True)
     legacy.write_text('{"characters": {"pebbles": {"talk": ["旧台词"]}}}', encoding="utf-8")
     chosen = pick_pool_path(app, legacy, lambda _: True)
     assert chosen == app, "老位置有内容时应当搬到桌宠目录"
     assert "旧台词" in app.read_text(encoding="utf-8"), "玩家改过的台词不能丢"
 
-
-def test_pool_path_falls_back_when_the_app_dir_is_read_only(tmp_path):
-    from iterator_pet.simulation.lines import pick_pool_path
-
-    app = tmp_path / "readonly" / "lines.json"
-    legacy = tmp_path / "legacy" / "lines.json"
-    assert pick_pool_path(app, legacy, lambda _: False) == legacy
+    readonly = tmp_path / "readonly" / "lines.json"
+    legacy2 = tmp_path / "legacy2" / "lines.json"
+    assert pick_pool_path(readonly, legacy2, lambda _: False) == legacy2, "不可写才退回老位置"
 
 
 def test_data_dir_is_the_app_dir_by_default():

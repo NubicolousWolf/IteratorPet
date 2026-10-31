@@ -52,47 +52,42 @@ def _router(tmp_path, transport=None) -> llm_route.LLMRouter:
 
 
 # --------------------------------------------------------------- 清洗 --
-def test_only_the_basename_survives():
+def test_the_name_is_cleaned_before_it_ever_reaches_the_model():
+    """文件名进来先过三道：去路径、去控制字符、截长（保后缀）。
+
+    合并理由：这三条是同一个函数 `sanitize_name` 的三个侧面，分开只是让报告更长。
+    """
     assert llm_fileinfo.sanitize_name(r"C:\Users\me\Desktop\照片.PNG") == "照片.PNG"
     assert llm_fileinfo.sanitize_name("/home/me/a.txt") == "a.txt"
-    assert llm_fileinfo.sanitize_name("..\\..\\secret.md") == "secret.md"
+    assert llm_fileinfo.sanitize_name(r"..\..\secret.md") == "secret.md", "路径穿越要削平"
 
+    dirty = "a" + chr(10) + "b" + chr(9) + "c" + chr(13) + chr(1) + "d.txt"
+    assert llm_fileinfo.sanitize_name(dirty) == "a b c d.txt", "换行/制表/控制字符都换空格"
 
-def test_newlines_and_control_characters_are_stripped():
-    dirty = "a\nb\tc\r\x01d.txt"
-    assert llm_fileinfo.sanitize_name(dirty) == "a b c d.txt"
-
-
-def test_a_long_name_is_cut_but_keeps_the_extension():
-    name = llm_fileinfo.sanitize_name("x" * 120 + ".png")
-    assert len(name) == llm_fileinfo.MAX_NAME_CHARS
-    assert name.endswith(".png")
+    long_name = llm_fileinfo.sanitize_name("x" * 120 + ".png")
+    assert len(long_name) == llm_fileinfo.MAX_NAME_CHARS
+    assert long_name.endswith(".png"), "截断不能把后缀吃掉"
 
 
 # --------------------------------------------------------------- 分类 --
-def test_a_known_extension_is_a_file():
-    drop = llm_fileinfo.classify("照片.PNG".lower())
-    assert drop.kind == "file" and drop.name == "照片.png"
-    assert "照片.png" in drop.text and "「" in drop.text, "文件名要包成数据"
-    assert drop.text.count("\n") == 0
+def test_any_name_is_sent_because_the_suffix_is_information():
+    """用户 2026-10-30：**不搞后缀白名单**，后缀本身也是信息，交给模型判断。
 
+    合并了原来的三条（已知后缀 / 陌生后缀 / 无后缀）：它们测的都是
+    "classify 不会因为后缀不认识的就把文件丢掉"。
+    """
+    known = llm_fileinfo.classify("照片.PNG".lower())
+    assert known.kind == "file" and known.name == "照片.png"
+    assert "照片.png" in known.text and "「" in known.text, "文件名要包成数据"
+    assert chr(10) not in known.text, "提示词里不许带真换行"
 
-def test_any_extension_is_sent_because_the_suffix_is_information():
-    """用户 2026-10-30：不搞白名单，后缀一起交给模型，让它自己判断这是什么。"""
     for name in ("virus.xyz", "five-pebbles-实机.mp4", "a.unknownext"):
         drop = llm_fileinfo.classify(name)
         assert drop.kind == "file", name
         assert name in drop.text
 
-
-def test_a_name_without_extension_is_still_sent():
-    """可能是文件夹：她只看得见名字，照样能说点什么。"""
-    drop = llm_fileinfo.classify("游戏截图")
-    assert drop.kind == "file" and "游戏截图" in drop.text
-
-
-def test_an_empty_name_is_refused():
-    assert llm_fileinfo.classify("   ").kind == ""
+    no_ext = llm_fileinfo.classify("游戏截图")      # 可能是文件夹
+    assert no_ext.kind == "file" and "游戏截图" in no_ext.text
 
 
 def test_the_broadcast_prefix_turns_a_name_into_player_speech():

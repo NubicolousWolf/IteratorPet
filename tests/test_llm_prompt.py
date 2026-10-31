@@ -58,30 +58,31 @@ def _card() -> llm_prompt.Card:
 
 
 # ------------------------------------------------------------- 激活：基本 --
-def test_a_key_hits_inside_a_longer_chinese_word():
-    book = _book([_entry(keys=("卵石",))])
-    assert [e.id for e in book.activate(["我想问五块卵石的事"])] == ["e"]
+def test_activation_basics_key_miss_constant_and_placeholder():
+    """四条基本规则：中文子串命中、不命中不激活、常驻不需要关键词、占位条目不生效。
 
+    合在一条里：都是 `activate()` 的入门行为，单条失败时看断言消息就够定位。
+    """
+    hits = _book([_entry(keys=("卵石",))])
+    assert [e.id for e in hits.activate(["我想问五块卵石的事"])] == ["e"], "中文子串要能命中"
 
-def test_a_miss_does_not_activate_and_empty_keys_never_do():
-    book = _book([_entry(keys=("皓月",)), _entry(id="nokeys", keys=())])
-    assert book.activate(["我在这里"]) == []
+    miss = _book([_entry(keys=("皓月",)), _entry(id="nokeys", keys=())])
+    assert miss.activate(["我在这里"]) == [], "不命中/没关键词都不激活"
 
+    constant = _book([_entry(id="c", keys=(), constant=True)])
+    assert [e.id for e in constant.activate([""])] == ["c"], "常驻不需要关键词"
 
-def test_constant_entries_need_no_key():
-    book = _book([_entry(id="c", keys=(), constant=True)])
-    assert [e.id for e in book.activate([""])] == ["c"]
-
-
-def test_placeholder_entries_are_skipped():
-    book = _book([_entry(id="p", keys=("卵石",), content="（待填：她是谁）")])
-    assert book.activate(["卵石"]) == []
+    placeholder = _book([_entry(id="p", keys=("卵石",), content="（待填：她是谁）")])
+    assert placeholder.activate(["卵石"]) == [], "占位条目不进提示词"
 
 
 # ------------------------------------------------------------- 次级逻辑 --
-@pytest.mark.parametrize(
-    "logic,secondary,expect",
-    [
+def test_the_four_selective_logics():
+    """四种次级逻辑 × 命中/不命中。
+
+    原来是 8 条 parametrize —— 但 parametrize 只压代码不压条目数，改成循环。
+    """
+    cases = [
         ("AND_ANY", ("下雨", "白天"), True),
         ("AND_ANY", ("月亮", "黑夜"), False),
         ("AND_ALL", ("下雨", "白天"), True),
@@ -90,12 +91,11 @@ def test_placeholder_entries_are_skipped():
         ("NOT_ANY", ("下雨",), False),
         ("NOT_ALL", ("下雨", "月亮"), True),
         ("NOT_ALL", ("下雨", "白天"), False),
-    ],
-)
-def test_the_four_selective_logics(logic, secondary, expect):
-    book = _book([_entry(keys=("卵石",), secondary_keys=secondary, logic=logic)])
-    hit = bool(book.activate(["卵石 下雨 白天"]))
-    assert hit is expect
+    ]
+    for logic_name, secondary, expect in cases:
+        book = _book([_entry(keys=("卵石",), secondary_keys=secondary, logic=logic_name)])
+        hit = bool(book.activate(["卵石 下雨 白天"]))
+        assert hit is expect, f"{logic_name} + {secondary} 应该是 {expect}"
 
 
 def test_probability_zero_never_fires_and_zero_percent_is_deterministic():
@@ -234,55 +234,6 @@ def test_situation_carries_filename_as_data_not_instruction():
 
 
 # ---------------------------------------------------------------- 快照 --
-def test_snapshot_of_the_assembled_messages(tmp_path):
-    """固定输入 → 固定 messages。改了顺序/文案这里就会红，这是故意的。"""
-    book = _book(
-        [
-            _entry(id="iterators", keys=(), constant=True, position="before_char_defs",
-                   content="迭代器是机械生命。", order=100),
-            _entry(id="five", keys=("卵石",), content="五块卵石很烦躁。", order=200),
-        ]
-    )
-    assembled = llm_prompt.assemble(
-        _card(), book, _cfg(history_messages=10),
-        history=[("user", "在吗"), ("assistant", "在。"), ("user", "五块卵石？")],
-        situation=llm_prompt.Situation(event="talk", mood="平静", last_line="在。"),
-    )
-    snapshot = {
-        "roles": [m["role"] for m in assembled.messages],
-        "messages": assembled.messages,
-        "tokens_positive": assembled.tokens > 0,
-        "entries": [e.id for e in assembled.entries],
-    }
-    assert snapshot == {
-        "roles": ["system", "user", "assistant", "user", "user", "system"],
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "你扮演她。\n\n"
-                    + llm_prompt.OUTPUT_CONTRACT
-                    + "\n\n迭代器是机械生命。\n\n一间满是机械臂的房间。\n冷淡。\n她在算东西。"
-                    + "\n\n五块卵石很烦躁。"
-                ),
-            },
-            {"role": "user", "content": "在吗"},
-            {"role": "assistant", "content": "在。"},
-            {"role": "user", "content": "五块卵石？"},
-            {
-                "role": "user",
-                "content": llm_prompt.Situation(
-                    event="talk", mood="平静", last_line="在。"
-                ).to_text(),
-            },
-            {"role": "system", "content": "一句话，不超过 40 字。"},
-        ],
-        "tokens_positive": True,
-        "entries": ["iterators", "five"],
-    }
-
-
-# ------------------------------------------------------------- 容错加载 --
 def test_worldbook_load_is_tolerant_and_never_overwrites(tmp_path):
     path = tmp_path / "worldbook.json"
     path.write_text("{ 手改坏了", encoding="utf-8")

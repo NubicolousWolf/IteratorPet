@@ -57,42 +57,29 @@ def _book_file(tmp_path: Path, **extra) -> Path:
     return path
 
 
-def test_worldbook_save_round_trips_the_edited_entry(tmp_path):
-    path = _book_file(tmp_path)
-    book = wb.Worldbook(path).load()
-    book.entries[0].content = "改过的A"
-    assert book.save() is True
-    assert book.last_error == ""
+def test_worldbook_save_round_trips_keeps_unknown_keys_and_clamps(tmp_path):
+    """存回去之后：改过的正文在、没改的不动、未知键活着、越界值被夹。
 
-    again = wb.Worldbook(path).load()
-    assert again.entries[0].content == "改过的A"
-    assert again.entries[1].content == "正文B", "没改的那条不许被动"
-
-
-def test_worldbook_save_keeps_unknown_keys_at_both_levels(tmp_path):
-    """顶层未知键、条目未知字段都要活着 —— 未来版本/玩家手写的东西不能被我们吃掉。"""
+    合并理由：这四条都在验 `Worldbook.save()` 的同一个承诺——“写出去的东西玩家还能读回来”。
+    """
     path = _book_file(tmp_path, future_top="保留我")
     book = wb.Worldbook(path).load()
+    book.entries[0].content = "改过的A"
     book.entries.append(wb.Entry(id="c", comment="新", keys=("红日",), content="正文C"))
-    assert book.save() is True
-
-    document = json.loads(path.read_text(encoding="utf-8"))
-    assert document["future_top"] == "保留我"
-    assert document["entries"][0]["future_field"] == 42
-    assert document["entries"][2]["id"] == "c"
-    assert document["entries"][2]["selective_logic"] == "AND_ANY", "写回用文件约定的键名"
-
-
-def test_worldbook_save_clamps_out_of_range_numbers(tmp_path):
-    path = _book_file(tmp_path)
-    book = wb.Worldbook(path).load()
     book.scan_depth = 999
     book.token_budget = -5
     book.entries[0].probability = 500
     book.entries[0].order = 10 ** 6
-    assert book.save() is True
+    assert book.save() is True and book.last_error == ""
+
+    again = wb.Worldbook(path).load()
+    assert again.entries[0].content == "改过的A", "改过的要写进去"
+    assert again.entries[1].content == "正文B", "没改的不许被动"
 
     document = json.loads(path.read_text(encoding="utf-8"))
+    assert document["future_top"] == "保留我", "顶层未知键要活着"
+    assert document["entries"][0]["future_field"] == 42, "条目未知字段也要活着"
+    assert document["entries"][2]["selective_logic"] == "AND_ANY", "写回用文件约定的键名"
     assert document["scan_depth"] == wb.SCAN_DEPTH_LIMIT
     assert document["token_budget"] == 0
     assert document["entries"][0]["probability"] == 100
@@ -183,7 +170,9 @@ def test_appearance_draft_can_be_written_read_and_deleted(tmp_path):
 # --------------------------------------------------------------------------
 # 像素画
 # --------------------------------------------------------------------------
-def test_pixel_art_round_trips_through_json():
+def test_pixel_art_round_trips_and_survives_garbage():
+    """序列化往返一致；任何垃圾输入都退化成 `None`/透明，绝不抛异常。
+    """
     art = PixelArt.blank()
     art.set(3, 4, "#ff0000")
     art.set(4, 4, "#00ff00")
@@ -193,6 +182,14 @@ def test_pixel_art_round_trips_through_json():
     assert document["palette"] == ["#ff0000", "#00ff00"], "按首次出现的顺序去重"
     assert PixelArt.from_dict(document).to_dict() == document
     assert PixelArt.from_dict(document).filled() == 3
+
+    # 垃圾输入：坏尺寸、坏色号、坏字符、缺行，全部不抛
+    assert PixelArt.from_dict(None) is None
+    assert PixelArt.from_dict({"w": 0, "h": 20, "palette": [], "grid": []}) is None
+    assert PixelArt.from_dict({"w": 4, "h": 2, "palette": ["#zzzzzz"], "grid": ["aaaa", "aaaa"]}) is None
+    partial = PixelArt.from_dict({"w": 3, "h": 2, "palette": ["#ffffff"], "grid": ["0.9", "000"]})
+    assert partial is not None and partial.get(0, 0) == "#ffffff"
+    assert partial.get(2, 0) is None, "认不出的字符当透明，不整张丢弃"
 
 
 def test_pixel_art_refuses_silently_losing_colours():
@@ -215,14 +212,14 @@ def test_pixel_art_survives_garbage():
 # --------------------------------------------------------------------------
 # 外观合成
 # --------------------------------------------------------------------------
-def test_build_appearance_without_override_is_the_source_instance():
+def test_build_appearance_overlays_colours_onto_the_chosen_base():
+    """无覆盖 = 源码实例；有覆盖 = 色值/两点袍色/基底继承都对。
+    """
     assert ap.build_appearance("pebbles", "pebbles", {}) is ap.PEBBLES
     assert ap.build_appearance("past_moon", "past_moon", None) is ap.PAST_MOON
     custom = ap.build_appearance("srs", "past_moon", {})
-    assert custom.key == "srs" and custom.skin == ap.PAST_MOON.skin
+    assert custom.key == "srs" and custom.skin == ap.PAST_MOON.skin, "空覆盖也要认得基底的骨头"
 
-
-def test_build_appearance_applies_colours_and_two_point_gown():
     appearance = ap.build_appearance("x", "pebbles", {
         "skin": "#112233", "eye": [255, 0, 0], "halo": "ff6600",
         "halo_spark": "#00ffff", "gown_top": "#ffffff", "gown_bottom": "#000000",
@@ -230,13 +227,15 @@ def test_build_appearance_applies_colours_and_two_point_gown():
     assert appearance.skin == (17, 34, 51)
     assert appearance.eye == (255, 0, 0)
     assert appearance.halo == (255, 102, 0)
-    assert appearance.halo_spark == (0, 255, 255)
+    assert appearance.halo_spark == (0, 255, 255), "电光要能独立于光环"
     assert appearance.gown(0.0) == (255, 255, 255)
     assert appearance.gown(1.0) == (0, 0, 0)
-    assert appearance.gown(0.5) == (127, 127, 127)
+    assert appearance.gown(0.5) == (127, 127, 127), "两点之间线性插值"
 
 
-def test_build_appearance_turns_the_pixel_headpiece_on_and_the_third_eye_off():
+def test_build_appearance_turns_the_pixel_headpiece_on():
+    """画了像素头饰就装上；缩放夹在 0.2–2.0；选了但画布是空的当作没开。
+    """
     art = PixelArt.blank()
     art.set(10, 10, "#ff00ff")
     appearance = ap.build_appearance("x", "past_moon", {
@@ -244,21 +243,23 @@ def test_build_appearance_turns_the_pixel_headpiece_on_and_the_third_eye_off():
         "headpiece_scale": 9.0,
     })
     assert appearance.headpiece is not None and appearance.headpiece.filled() == 1
-    assert appearance.third_eye is False, "画了自己的头饰就别再叠一个圆点"
     assert appearance.headpiece_scale == 2.0, "缩放要夹在 0.2–2.0"
 
+    empty = ap.build_appearance("x", "pebbles", {"headpiece_mode": "pixel"})
+    assert empty.headpiece is None, "选了自定义但没画东西 → 当作没开"
 
-def test_headpiece_mode_none_follows_the_base_template():
-    """「无」= **不覆盖**：卵石本来没有第三只眼，仰望皓月 DM 有（og.cs:2238-2254）。
 
-    编辑器里那个"原版圆点"选项 2026-10-31 删掉了（作用被自定义画板替代），
-    但源码给 DM 画第三只眼这件事没删——它属于角色的原版外观，不是可选装饰。
+def test_headpiece_mode_none_draws_nothing_at_all():
+    """「无」就是真的什么都没有。
+
+    2026-10-31 用户拍板：第三只眼**整个删掉**（编辑器选项、渲染函数、数据结构全删），
+    它的作用已经被自定义像素头饰替代 —— 所以应用仰望皓月模板时头顶部件默认为“无”。
     """
-    pebbles = ap.build_appearance("x", "pebbles", {"headpiece_mode": "none"})
-    assert pebbles.third_eye is False and pebbles.headpiece is None
-    moon = ap.build_appearance("x", "past_moon", {"headpiece_mode": "none"})
-    assert moon.third_eye is True and moon.headpiece is None
-    assert "builtin_dot" not in ap.HEADPIECE_MODES
+    for base in ("pebbles", "past_moon"):
+        appearance = ap.build_appearance("x", base, {"headpiece_mode": "none"})
+        assert appearance.headpiece is None, f"{base} 的“无”不许有头饰"
+    assert not hasattr(ap.PAST_MOON, "third_eye"), "第三只眼已经从数据模型里删掉"
+    assert not hasattr(ap.PEBBLES, "third_eye")
 
 
 def test_builtin_spark_colour_equals_what_the_renderer_drew_before_it_was_wired():
@@ -367,42 +368,32 @@ def test_puppet_tab_translates_a_stored_draft_back_into_widgets(tmp_path):
 # --------------------------------------------------------------------------
 # 画笔选色（第一版漏了：画板只有一个写死的默认色）
 # --------------------------------------------------------------------------
-def test_the_brush_colour_reaches_the_canvas(tmp_path):
+def test_the_brush_colour_reaches_every_canvas_and_can_be_picked(tmp_path):
+    """画笔色要传到三块画板；吸管能把画布上的颜色吸回来；用过的色进"最近"。
+    """
+    from iterator_pet.platform.puppet_tab import PixelCanvas
+
     (tmp_path / "characters").mkdir(parents=True)
     tab = PuppetTab(tmp_path)
     tab.brush_colour.set_colour("#ff0000")
     tab._on_brush_colour("#ff0000")
-    assert tab.current_canvas().colour == "#ff0000"
     for canvas in tab.canvases.values():
-        assert canvas.colour == "#ff0000", "三个画板共用画笔颜色"
+        assert canvas.colour == "#ff0000", "三块画板共用画笔颜色"
 
-
-def test_the_eyedropper_takes_the_colour_from_the_pixel():
-    from iterator_pet.platform.puppet_tab import PixelCanvas
-
-    canvas = PixelCanvas(None, cell=8)
-    canvas.art.set(2, 2, "#00ff88")
+    picker = PixelCanvas(None, cell=8)
+    picker.art.set(2, 2, "#00ff88")
     picked: list[str] = []
-    canvas.picked.connect(picked.append)
-    canvas._pick(2, 2)
-    assert canvas.colour == "#00ff88"
-    assert picked == ["#00ff88"]
+    picker.picked.connect(picked.append)
+    picker._pick(2, 2)
+    assert picker.colour == "#00ff88" and picked == ["#00ff88"]
+    picker._pick(0, 0)
+    assert picker.colour == "#00ff88", "空白处不该改色"
 
-    canvas._pick(0, 0)                      # 空白处不该改色
-    assert canvas.colour == "#00ff88"
-
-
-def test_recent_colours_show_up_after_using_them(tmp_path):
-    (tmp_path / "characters").mkdir(parents=True)
-    tab = PuppetTab(tmp_path)
     tab._use_colour("#123456")
     assert "#123456" in tab._recent
     assert tab.brush_colour.colour() == "#123456"
 
 
-# --------------------------------------------------------------------------
-# 天线画板
-# --------------------------------------------------------------------------
 def test_antenna_board_round_trips_through_the_card(tmp_path):
     (tmp_path / "characters").mkdir(parents=True)
     tab = PuppetTab(tmp_path)
@@ -622,3 +613,28 @@ def test_the_antenna_points_outward_not_inward():
     assert red_dist > blue_dist + 20, (
         f"触角尖应该在远端（红 {red_dist:.0f}px），耳麦在近端（蓝 {blue_dist:.0f}px）"
     )
+
+
+def test_the_board_background_can_be_changed_from_the_toolbar(tmp_path):
+    """画板底色可改（用户 2026-10-31：默认深色会和深色部件糊在一起看不清）。
+
+    底色存在 config.json（编辑器偏好，不写进角色卡），改完三块画板一起生效。
+    """
+    from iterator_pet.config import Config
+
+    (tmp_path / "characters").mkdir(parents=True)
+    config = Config()
+    tab = PuppetTab(tmp_path, config=config)
+    assert tab.canvases["antenna"].bg == config.board_bg, "默认跟着配置走"
+
+    tab._on_board_bg("#d0d0d4")
+    for key, canvas in tab.canvases.items():
+        assert canvas.bg == "#d0d0d4", f"{key} 画板没换底色"
+    assert config.board_bg == "#d0d0d4", "选择要落回 config"
+
+    # 参考线颜色要跟着底色反着来，否则换了底色就看不见
+    tab.canvases["headpiece"].bg = "#101010"
+    dark_ink = tab.canvases["headpiece"]._palette_of_board()[2]
+    tab.canvases["headpiece"].bg = "#f0f0f0"
+    light_ink = tab.canvases["headpiece"]._palette_of_board()[2]
+    assert dark_ink != light_ink, "深底用亮线、浅底用暗线"

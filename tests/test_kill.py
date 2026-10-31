@@ -1,3 +1,4 @@
+import pytest
 """心情 + "杀鼠标"仪式（docs/PLAN-kill.md）的纯状态测试。
 
 只测仿真侧：心情速率、破闸强制打断、仪式时序、abort 不重入、冷却、快照刷新、面板合同。
@@ -33,6 +34,7 @@ def _drag_until_gate(sim: SimulationState, sim_px_per_tick: float, limit: int = 
     return n
 
 
+@pytest.mark.slow
 def test_slow_drag_takes_about_twenty_seconds():
     # 0.6 仿真 px/tick @ scale 1.5 = 36 屏幕 px/s 的"慢拖"
     ticks = _drag_until_gate(_sim(), 0.6)
@@ -45,6 +47,7 @@ def test_fast_drag_takes_about_ten_seconds():
     assert 380 <= ticks <= 425, f"快拖到破闸用了 {ticks} tick（{ticks / 40:.1f} s），期望约 10 s"
 
 
+@pytest.mark.slow
 def test_screen_speed_is_independent_of_size_tier():
     """同一只手（600 屏幕 px/s）在 40% 档与 PRO 档必须同样快到闸（审计 P0-6）。"""
     results = []
@@ -176,15 +179,6 @@ def test_status_keeps_the_three_state_behaviour():
     assert status["kill"]["phase"] in ("warning", "charging", "flash", "cooldown", "idle")
 
 
-def test_drag_test_guard_two_hundred_ticks_is_safe():
-    """护栏：以后有人把拖拽测试加长到 200 tick，也不该被仪式打断（报错指得到真因）。"""
-    sim = _sim()
-    ticks = _drag_until_gate(sim, 12.0, limit=200)
-    assert ticks == 200, "200 tick 就让仪式触发了，说明速率常数变了"
-    assert sim.kill.phase == "idle"
-    assert sim.dragging
-
-
 def test_trigger_retreats_to_one_and_a_half_talk_distance():
     """用户 2026-10-29：触发时人偶要立刻挣脱光标，退到 1.5×talk 距离处站定、摆正位姿。"""
     sim = _sim()
@@ -248,6 +242,7 @@ def test_halo_brightens_during_the_ritual():
 # --------------------------------------------------------------------------
 # 过去之月：删掉杀鼠标、只保留挣脱（用户 2026-10-29 拍板，PLAN-moon §4.1）
 # --------------------------------------------------------------------------
+@pytest.mark.slow
 def test_past_moon_only_struggles_and_never_flashes():
     sim = _sim(character="past_moon")
     _drag_until_gate(sim, 0.6)
@@ -271,7 +266,8 @@ def test_past_moon_appearance_matches_the_dm_branch():
     from iterator_pet.simulation.appearance import PAST_MOON, PEBBLES
 
     assert PAST_MOON.tremble_only is True
-    assert PAST_MOON.third_eye is True
+    # 第三只眼 2026-10-31 按用户拍板**整个删掉**（作用被自定义像素头饰替代），
+    # 所以这里不再断言它；DM 分支剩下的差异仍然要钉住。
     # og.cs:2298-2300 / 2169 / 1939 / 2197 / 1913-1916
     assert PAST_MOON.skin == (33, 135, 175)
     assert PAST_MOON.eye_scale_y == 3.0

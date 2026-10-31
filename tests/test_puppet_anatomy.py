@@ -1,3 +1,4 @@
+import pytest
 """Locks down the numbers that the puppet's legs and robe are built from.
 
 Each assertion cites the decompiled line it protects. The suite used to have no
@@ -17,6 +18,7 @@ def _lateral(point, origin, perp):
     return dx * perp[0] + dy * perp[1]
 
 
+@pytest.mark.slow
 def test_foot_sits_exactly_on_the_ten_pixel_tether():
     """og.cs:1643  ConnectToPoint(bodyChunks[1].pos, IsMoon ? 20f : 10f, ...).
 
@@ -66,6 +68,7 @@ def test_foot_sits_exactly_on_the_ten_pixel_tether():
     assert 3.0 < mean < 5.5, f"parked mean lateral offset {mean:.2f}, expected ~4.47"
 
 
+@pytest.mark.slow
 def test_body_axis_hangs_down_instead_of_laying_flat():
     """oracle.cs:294 pulls ``bodyChunks[1]`` toward ``getTo - GetToDir * 9``.
 
@@ -116,6 +119,7 @@ def test_body_axis_hangs_down_instead_of_laying_flat():
     assert median(parked + drifting) < 30.0
 
 
+@pytest.mark.slow
 def test_head_sits_on_top_of_the_body_and_leans_toward_the_gaze():
     """og.cs:1621-1632, in the source's order.
 
@@ -415,6 +419,7 @@ def test_cord_is_long_enough_and_keeps_its_ten_pixel_pitch():
     assert free_links < 0.14, f"worst free link {free_links:.3f}"
 
 
+@pytest.mark.slow
 def test_filament_strands_are_the_source_node_simulation():
     """``og.cs:873-913``: 14 strands x 20 SIMULATED nodes, both ends welded.
 

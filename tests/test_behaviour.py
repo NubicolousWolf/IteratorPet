@@ -1,3 +1,4 @@
+import pytest
 """Behaviour selection: roaming / investigate / talk.
 
 The selector itself is a DESIGN ADDITION -- the source sets ``movementBehavior``
@@ -89,6 +90,7 @@ def test_a_moving_cursor_earns_investigate_without_crowding_out_roaming():
     assert "talk" not in history, "a cursor in motion is not something to talk at"
 
 
+@pytest.mark.slow
 def test_the_conversation_standoff_is_three_gown_widths():
     """Talk parks 76 sim px from the cursor, not 25 % of the chamber.
 

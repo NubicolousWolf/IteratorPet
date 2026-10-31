@@ -170,6 +170,7 @@ class PixelCanvas(QWidget):
         self.erasing = False
         self.symmetric = False
         self.pick_mode = False
+        self.bg = "#6b6b70"          # 画板底色，由工具条的色块改（见 PuppetTab）
         self._undo: list[list[list[str | None]]] = []
         self._painting = False
         self._stroke_dirty = False
@@ -261,15 +262,29 @@ class PixelCanvas(QWidget):
             self._undo.pop()                # 空笔画不留撤销点
 
     # -- 绘制 ---------------------------------------------------------------
+    def _palette_of_board(self) -> tuple[QColor, QColor, QColor]:
+        """底色 → (棋盘深格, 棋盘浅格, 线条色)。
+
+        底色可改（用户 2026-10-31：默认深色会和深色部件糊在一起）：
+        棋盘格用同色系 ±12%，线条按亮度自动切黑/白，保证在任何底色上都看得见。
+        """
+        base = QColor(self.bg)
+        light = base.lighter(112)
+        dark = base.darker(114)
+        luma = 0.299 * base.red() + 0.587 * base.green() + 0.114 * base.blue()
+        ink = QColor("#101014") if luma > 140 else QColor("#f2f2f6")
+        return dark, light, ink
+
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        painter.fillRect(self.rect(), QColor("#202024"))
+        dark, light, ink = self._palette_of_board()
+        painter.fillRect(self.rect(), dark)
         for y in range(self.art.h):
             for x in range(self.art.w):
                 if (x + y) % 2 == 0:
                     painter.fillRect(
-                        x * self.cell, y * self.cell, self.cell, self.cell, QColor("#26262a")
+                        x * self.cell, y * self.cell, self.cell, self.cell, light
                     )
         for y in range(self.art.h):
             for x in range(self.art.w):
@@ -279,7 +294,9 @@ class PixelCanvas(QWidget):
                 painter.fillRect(
                     x * self.cell, y * self.cell, self.cell, self.cell, QColor(colour)
                 )
-        painter.setPen(QPen(QColor(255, 255, 255, 18), 1))
+        grid_ink = QColor(ink)
+        grid_ink.setAlpha(46)
+        painter.setPen(QPen(grid_ink, 1))
         for x in range(self.art.w + 1):
             painter.drawLine(x * self.cell, 0, x * self.cell, self.height())
         for y in range(self.art.h + 1):
@@ -288,9 +305,19 @@ class PixelCanvas(QWidget):
         painter.end()
 
     def _paint_reference(self, painter: QPainter) -> None:
-        """参考线：**照源码算的位置**，不是随手画的示意。"""
+        """参考线：**照源码算的位置**，不是随手画的示意。
+
+        颜色跟着画板底色走（`ink` = 深底用亮线、浅底用暗线），否则换个底色参考线就消失。
+        """
+        ink = self._palette_of_board()[2]
+
+        def ref_pen(alpha: int, style=Qt.PenStyle.DashLine) -> QPen:
+            colour = QColor(ink)
+            colour.setAlpha(alpha)
+            return QPen(colour, 1, style)
+
         if self.reference == "head":
-            painter.setPen(QPen(QColor(255, 255, 255, 90), 1, Qt.PenStyle.DashLine))
+            painter.setPen(ref_pen(170))
             cx = self.art.w * 0.5
             cy = self.art.h * 0.5
             head_w = 20.0 * R.HEAD_RAD / 9.0 * 2.0        # 11.11 仿真 px -> 22.2 格
@@ -300,7 +327,7 @@ class PixelCanvas(QWidget):
                 head_w * 0.5 * self.cell,
                 head_h * 0.5 * self.cell,
             )
-            painter.setPen(QPen(QColor(255, 255, 255, 130), 1))
+            painter.setPen(ref_pen(210, Qt.PenStyle.SolidLine))
             for sign in (-1, 1):
                 ex = cx + sign * 2.5 * 2.0               # perp 方向 ±2.5 仿真 px
                 ey = cy + 1.0 * 2.0                      # 体轴方向 1 仿真 px（朝下）
@@ -315,20 +342,20 @@ class PixelCanvas(QWidget):
             cell = self.cell
             cx = self.art.w * 0.5 * cell
             cy = ap.antenna_pod_center_row(self.art.h) * cell
-            painter.setPen(QPen(QColor(255, 255, 255, 95), 1, Qt.PenStyle.DashLine))
+            painter.setPen(ref_pen(180))
             painter.drawEllipse(QPointF(cx, cy),
                                 ap.ANTENNA_POD_DIAMETER_PX * cell,
                                 ap.ANTENNA_POD_DIAMETER_PX * cell)
-            painter.setPen(QPen(QColor(255, 255, 255, 70), 1, Qt.PenStyle.DotLine))
+            painter.setPen(ref_pen(140, Qt.PenStyle.DotLine))
             painter.drawEllipse(QPointF(cx, cy),
                                 ap.ANTENNA_POD_DIAMETER_PX * 0.8 * cell,
                                 ap.ANTENNA_POD_DIAMETER_PX * 0.8 * cell)
-            painter.setPen(QPen(QColor(255, 200, 120, 150), 1, Qt.PenStyle.DashLine))
+            painter.setPen(ref_pen(200))
             stalk_w = ap.ANTENNA_STALK_WIDTH_PX * 2.0 * cell
             stalk_h = ap.ANTENNA_STALK_LENGTH_PX * 2.0 * cell
             painter.drawRect(QRectF(cx - stalk_w * 0.5, cy - stalk_h, stalk_w, stalk_h))
         else:
-            painter.setPen(QPen(QColor(255, 255, 255, 70), 1, Qt.PenStyle.DashLine))
+            painter.setPen(ref_pen(140))
             painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
 
@@ -405,15 +432,17 @@ class PuppetTab(QWidget):
 
     changed = Signal()
 
-    def __init__(self, folder=None, parent=None):
+    def __init__(self, folder=None, parent=None, config=None):
         super().__init__(parent)
         self.folder = folder
+        self.config = config            # 只有画板底色存这里（编辑器偏好，不写进角色卡）
         self.key = "pebbles"
         self._dirty = False
         self._loading = False
         self._headpiece_scale = 0.5
         self._antenna_scale = 0.5
         self._recent: list[str] = []
+        self._board_bg = getattr(config, "board_bg", "#6b6b70")
         self.buttons: dict[str, ColourButton] = {}
         self.canvases: dict[str, PixelCanvas] = {}
         self._build()
@@ -494,6 +523,14 @@ class PuppetTab(QWidget):
         for widget in (self.brush_box, self.pick_box, self.symmetric):
             tools.addWidget(widget)
         left.addLayout(tools)
+
+        # 画板底色：默认深色会和深色部件糊在一起看不清（用户 2026-10-31）
+        bg_row = QHBoxLayout()
+        self.board_bg_button = ColourButton("画板底色", self._board_bg,
+                                            "换一个和部件反差大的底色，参考线会跟着变深浅")
+        self.board_bg_button.picked.connect(self._on_board_bg)
+        bg_row.addWidget(self.board_bg_button, 1)
+        left.addLayout(bg_row)
         left.addStretch(1)
 
         # ---- 中间：三个画板 ----
@@ -569,6 +606,7 @@ class PuppetTab(QWidget):
         self.export_button.clicked.connect(self.export_png)
         self.default_button.clicked.connect(self.reset_appearance)
         self.base_box.currentIndexChanged.connect(self._on_base)
+        self._apply_board_bg()
         self._refresh_recent()
 
     # -- 画板选择 -----------------------------------------------------------
@@ -807,6 +845,19 @@ class PuppetTab(QWidget):
 
     def _on_brush(self, *_args) -> None:
         self.current_canvas().brush = int(self.brush_box.currentData() or 1)
+
+    def _on_board_bg(self, colour: str) -> None:
+        self._board_bg = _hex(colour)
+        self._apply_board_bg()
+        if self.config is not None:
+            self.config.board_bg = self._board_bg
+            from ..config import save as save_config
+            save_config(self.config)
+
+    def _apply_board_bg(self) -> None:
+        for canvas in self.canvases.values():
+            canvas.bg = self._board_bg
+            canvas.update()
 
     def _on_pick_mode(self, checked: bool) -> None:
         for canvas in self.canvases.values():

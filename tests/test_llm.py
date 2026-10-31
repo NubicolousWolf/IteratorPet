@@ -108,34 +108,33 @@ def test_parse_models_refuses_a_body_it_does_not_understand():
 
 
 # ------------------------------------------------------- 真 transport 错 --
-def test_urllib_transport_turns_401_into_a_status(monkeypatch):
-    def boom(*_args, **_kwargs):
-        raise urllib.error.HTTPError("http://x/models", 401, "Unauthorized", {}, None)
+def test_urllib_transport_turns_every_failure_into_words(monkeypatch):
+    """三种失败（401 / 超时 / 非 JSON）都翻成人能读的话，且不往外抛原始异常。
 
-    monkeypatch.setattr(llm_models.urllib.request, "urlopen", boom)
-    with pytest.raises(llm_models.TransportError) as info:
-        llm_models.UrllibTransport().get_json("http://x/models", {})
-    assert info.value.status == 401
-    assert "HTTP 401" in str(info.value)
+    合在一条里：这三种是同一个责任（`get_json` 的错误翻译），失败时分不清是谁的问题
+    时看断言消息就够了。
+    """
+    cases = [
+        (urllib.error.HTTPError("http://x/models", 401, "Unauthorized", {}, None), None,
+         "HTTP 401"),
+        (socket.timeout("timed out"), None, "超时"),
+        (None, b"<html>502</html>", "不是 JSON"),
+    ]
+    for raise_exc, body, expected in cases:
+        if raise_exc is not None:
+            def boom(*_args, **_kwargs):
+                raise raise_exc
 
-
-def test_urllib_transport_turns_a_timeout_into_words(monkeypatch):
-    def boom(*_args, **_kwargs):
-        raise socket.timeout("timed out")
-
-    monkeypatch.setattr(llm_models.urllib.request, "urlopen", boom)
-    with pytest.raises(llm_models.TransportError) as info:
-        llm_models.UrllibTransport().get_json("http://x/models", {})
-    assert "超时" in str(info.value)
-
-
-def test_urllib_transport_rejects_a_non_json_body(monkeypatch):
-    monkeypatch.setattr(
-        llm_models.urllib.request, "urlopen", lambda *_a, **_k: _Response(b"<html>502</html>")
-    )
-    with pytest.raises(llm_models.TransportError) as info:
-        llm_models.UrllibTransport().get_json("http://x/models", {})
-    assert "不是 JSON" in str(info.value)
+            monkeypatch.setattr(llm_models.urllib.request, "urlopen", boom)
+        else:
+            monkeypatch.setattr(
+                llm_models.urllib.request, "urlopen", lambda *_a, **_k: _Response(body)
+            )
+        with pytest.raises(llm_models.TransportError) as info:
+            llm_models.UrllibTransport().get_json("http://x/models", {})
+        assert expected in str(info.value), f"{expected} 没被翻译出来：{info.value}"
+        if expected == "HTTP 401":
+            assert info.value.status == 401
 
 
 def test_endpoints_match_the_two_protocols():

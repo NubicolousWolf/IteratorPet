@@ -1,3 +1,4 @@
+import pytest
 from math import hypot
 
 from iterator_pet.simulation import constants as C
@@ -121,6 +122,7 @@ def test_cord_node_count_keeps_the_ten_pixel_pitch():
                for L in cord.filament_len)
 
 
+@pytest.mark.slow
 def test_simulation_is_deterministic_and_stable():
     def run():
         sim = SimulationState((0.0, 0.0, 853.0, 480.0))
@@ -132,6 +134,7 @@ def test_simulation_is_deterministic_and_stable():
     assert run() == run()
 
 
+@pytest.mark.slow
 def test_tail_stays_attached_to_the_body():
     sim = SimulationState((0.0, 0.0, 853.0, 480.0))
     for _ in range(1200):
@@ -141,6 +144,7 @@ def test_tail_stays_attached_to_the_body():
         assert abs(distance - C.ARM_LENGTHS[-1]) < 12.0, distance
 
 
+@pytest.mark.slow
 def test_body_is_never_dragged_back_by_the_arm():
     """The arm bends to follow the body; it must not act as a leash.
 
@@ -168,6 +172,7 @@ def test_gown_keeps_its_proportions():
     assert 15.0 < width < 40.0
     assert 15.0 < height < 40.0
 
+@pytest.mark.slow
 def test_puppet_roams_the_whole_chamber():
     """Regression for "the pet only ever sits in the bottom-right corner".
 
@@ -211,6 +216,7 @@ def test_puppet_roams_the_whole_chamber():
     assert worst <= reach, f"puppet reached {worst:.0f} px from the carriage, arm is {reach:.0f}"
 
 
+@pytest.mark.slow
 def test_the_carriage_can_actually_leave_a_large_chamber():
     """Regression for "roaming 下人偶不倾向于大范围移动，底座几乎不动".
 

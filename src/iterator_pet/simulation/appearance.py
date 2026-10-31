@@ -45,9 +45,6 @@ class Appearance:
     # 桌面端没有光照系统，所以这个值是**实机截图采样**（见各实例的注释）。
     halo: tuple[int, int, int]
     halo_spark: tuple[int, int, int]
-    # og.cs:2238-2254  第三只眼（IsMoon || IsPastMoon || IsStraw）
-    third_eye: bool
-    third_eye_colour: tuple[int, int, int] | None
     # user 2026-10-29 拍板不做 MoonLight：`oracle.cs:658-664` 那盏 Color(0,0,1)/α0.8/
     # 半径 200 的灯在桌面端没有"暗房间"可照，实测就是一整块蓝布（_work/moon-moonlight.png）。
     # 同理 `MoonSigil`（og.cs:1973-1977/2255-2276）也不做，记在 ROADMAP §8 待办里。
@@ -96,8 +93,6 @@ PEBBLES = Appearance(
     # 这两个值就是"接通前实际画出来的颜色"（int(215*1.05)=225 …），所以观感零变化；
     # 从这一版起它才真正可改。（`constants.HALO_SPARK_COLOUR` 那个从未生效的意图一并删了。）
     halo_spark=(225, 128, 92),
-    third_eye=False,
-    third_eye_colour=None,
 )
 
 PAST_MOON = Appearance(
@@ -116,13 +111,6 @@ PAST_MOON = Appearance(
     # 电光=拍摄基色×1.05（接通前渲染层的写死公式），保持观感不变。
     halo=(196, 103, 116),
     halo_spark=(205, 108, 121),
-    third_eye=True,
-    # og.cs:2373-2376  Color.Lerp(new Color(1,0,1), skin, 0.3f)
-    third_eye_colour=(
-        int(255 + (33 - 255) * 0.3),
-        int(0 + (135 - 0) * 0.3),
-        int(255 + (175 - 255) * 0.3),
-    ),
     tremble_only=True,
 )
 
@@ -219,15 +207,11 @@ def build_appearance(key: str, base: str = "pebbles", override: dict | None = No
         art = PixelArt.from_dict(override.get("headpiece_pixels"))
         if art is not None and not art.is_empty():
             patch["headpiece"] = art
-            # 玩家自己画了头饰 → 不再叠源码那颗第三只眼（那就是"被自定义替代"）
-            patch["third_eye"] = False
-            patch["third_eye_colour"] = None
         else:
             # 选了"自定义像素画"但画布是空的 → 当作没开，别留一个看不见的状态
             patch["headpiece"] = None
-    # 其它情况（"none"/未知/没给）：不碰 third_eye，**跟随基底的源码行为**
-    # （卵石没有第三只眼；仰望皓月 DM 有，见 og.cs:2238-2254）。
-    # 2026-10-31 用户拍板删掉编辑器里"原版圆点"那个选项：它的作用已经被自定义画板替代。
+    # 2026-10-31 用户拍板：**第三只眼整个删掉**（编辑器里的选项、渲染、数据结构全删）。
+    # 它的作用已经被自定义像素头饰替代；"无"就是真的什么都不画。
 
     scale = override.get("headpiece_scale")
     if isinstance(scale, (int, float)) and not isinstance(scale, bool):

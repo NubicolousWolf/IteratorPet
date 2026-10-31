@@ -377,7 +377,8 @@ class PetWindow(PetCanvas):
 
         router = self.simulation.llm
         book = getattr(router, "book", None) if router is not None else None
-        self._workshop = show_workshop(book=book, folder=None, on_saved=self._reload_llm)
+        self._workshop = show_workshop(book=book, folder=None, on_saved=self._reload_llm,
+                                       config=self.config)
 
     def open_data_folder(self) -> None:
         """打开数据文件夹（打包版 = 启动.exe 旁边；只读介质下才是 `%LOCALAPPDATA%`）。

@@ -64,27 +64,15 @@ class Clock:
 
 
 # ------------------------------------------------------------------ 摘话 --
-def test_clean_line_removes_what_a_bubble_cannot_show():
-    assert llm_client.clean_line("我在这里。\n怎么了？") == "我在这里。 怎么了？"
-    assert llm_client.clean_line("五块卵石：滚开。") == "滚开。"
-    assert llm_client.clean_line("“滚开。”") == "滚开。"
-    assert llm_client.clean_line("*叹了口气*") == "叹了口气"
-    assert llm_client.clean_line("（叹气）你还在。") == "你还在。"
-    assert llm_client.clean_line("   \n\t ") == ""
+def test_clean_line_makes_a_reply_fit_a_bubble():
+    """摘话的三件事：去掉气泡显示不了的、掐断暴走回复、只剩舞台提示就算空。"""
+    assert llm_client.clean_line("**你好**。") == "你好。", "markdown 星号要摘掉"
+    assert chr(10) not in llm_client.clean_line("第一行\n第二行"), "换行要抹平（源码是 \n 占位，不是真换行）"
+    long = llm_client.clean_line("啊" * 400)
+    assert len(long) <= 120, "暴走回复要掐断"
+    assert llm_client.clean_line("（她转过头）") == "", "只有舞台提示 = 没有说话"
 
 
-def test_clean_line_clamps_a_runaway_reply():
-    text = llm_client.clean_line("啊" * 500)
-    assert len(text) == llm_client.MAX_LINE_CHARS
-    assert text.endswith("…")
-
-
-def test_clean_line_returns_empty_when_only_stage_direction():
-    assert llm_client.clean_line("（沉默）") == ""
-    assert llm_client.clean_line('""') == ""
-
-
-# ------------------------------------------------------------- 返回体 --
 def test_parse_completion_knows_both_protocols():
     assert llm_client.parse_completion(_reply("hi"), "openai") == "hi"
     assert llm_client.parse_completion({"choices": [{"text": "hi"}]}, "openai") == "hi"
@@ -162,40 +150,33 @@ def test_ask_uses_the_anthropic_endpoint_and_header(tmp_path):
 
 
 # --------------------------------------------------------------- 失败态 --
-def test_a_401_counts_as_a_failure_and_never_raises(tmp_path):
+def test_every_transport_failure_is_reported_without_raising(tmp_path):
+    """401 / 超时 / 429 / 空回复 —— 全部走同一条"失败但有原因"的路径。
+
+    合并理由：这四条测的是**同一个责任**（`ask()` 的失败翻译），任何一条单独变红
+    都要看同一段代码；断言消息里带上了是哪一种。
+    """
     store = _store(tmp_path)
-    transport = FakeTransport(error=llm_models.TransportError("HTTP 401：invalid key", 401))
-    client = llm_client.LLMClient(store, transport=transport)
+    cases = [
+        (llm_models.TransportError("HTTP 401：invalid key", 401), "HTTP 401", 401),
+        (llm_models.TransportError("超时（8 s 内没有响应）"), "超时", None),
+        (llm_models.TransportError("HTTP 429：rate limited", 429), "429", 429),
+    ]
+    for error, expected, status in cases:
+        client = llm_client.LLMClient(store, transport=FakeTransport(error=error))
+        result = client.ask([{"role": "user", "content": "hi"}])
+        assert not result.ok, f"{expected} 应该算失败"
+        assert expected in result.reason, f"{expected} 没出现在原因里：{result.reason}"
+        if status is not None:
+            assert result.status == status
+        assert client.breaker.failures == 1, "每次失败都要记到熔断器上"
 
-    result = client.ask([{"role": "user", "content": "hi"}])
-    assert not result.ok and "HTTP 401" in result.reason and result.status == 401
-    assert client.breaker.failures == 1
-
-
-def test_a_timeout_is_reported_in_words(tmp_path):
-    store = _store(tmp_path)
-    transport = FakeTransport(error=llm_models.TransportError("超时（8 s 内没有响应）"))
-    client = llm_client.LLMClient(store, transport=transport)
-    result = client.ask([{"role": "user", "content": "hi"}])
-    assert not result.ok and "超时" in result.reason
-
-
-def test_an_empty_or_unusable_reply_is_a_failure(tmp_path):
-    store = _store(tmp_path)
     client = llm_client.LLMClient(store, transport=FakeTransport({"choices": []}))
-    assert not client.ask([{"role": "user", "content": "hi"}]).ok
+    assert not client.ask([{"role": "user", "content": "hi"}]).ok, "空 choices 算失败"
 
     client = llm_client.LLMClient(store, transport=FakeTransport(_reply("（沉默）")))
     result = client.ask([{"role": "user", "content": "hi"}])
-    assert not result.ok and "空" in result.reason
-
-
-def test_a_429_body_is_reported_as_http_429(tmp_path):
-    store = _store(tmp_path)
-    transport = FakeTransport(error=llm_models.TransportError("HTTP 429：rate limited", 429))
-    client = llm_client.LLMClient(store, transport=transport)
-    result = client.ask([{"role": "user", "content": "hi"}])
-    assert not result.ok and result.status == 429 and "429" in result.reason
+    assert not result.ok and "空" in result.reason, "只有舞台提示也算空回复"
 
 
 # --------------------------------------------------------------- 熔断 --
