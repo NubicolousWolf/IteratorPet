@@ -234,7 +234,11 @@ class Lines:
         bucket = self._table.get(character) or {}
         if event in bucket:
             return list(bucket[event])
-        default = (self._default.get("characters") or {}).get(character) or {}
+        default = (self._default.get("characters") or {}).get(character)
+        if default is None:
+            # 自定义角色：内置默认表里没有她 → 中性占位（否则新建的角色一句话都不会说，
+            # 玩家第一反应是"这个功能坏了"，而不是"台词还没填"）。
+            return list(C.DIALOGUE_NEUTRAL_POOL.get(event) or [])
         return list(default.get(event) or [])
 
     def next_line(self, character: str, event: str) -> str | None:

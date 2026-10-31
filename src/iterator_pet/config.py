@@ -51,8 +51,8 @@ class Config:
     dialogue_enabled: bool = True
     # 人偶编辑器画板的底色（用户 2026-10-31：默认深色会和深色部件糊在一起看不清）。
     board_bg: str = "#6b6b70"
-    # 角色：pebbles（五块卵石）/ past_moon（过去之月，倾盆大雨 DLC 那位）。
-    # 外观参数在 simulation/appearance.py；托盘「角色」菜单切换。
+    # 当前角色：key 指向 characters/<key>.json 里的一张卡（v0.2.0 起可以是玩家
+    # 自己建的角色）。清单与外观解析在 characters.py；托盘/右键菜单切换。
     character: str = "pebbles"
 
 

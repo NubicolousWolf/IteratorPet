@@ -57,8 +57,10 @@ class LLMRouter:
         self.client = llm_client.LLMClient(store, transport=transport)
         self.chat = llm_history.ChatLog(character, folder=folder)
         self.card = llm_prompt.Card()
+        # 世界书：有 ``worldbooks/<key>.json`` 就用它，没有就回落根目录那份。
+        # 回落是硬要求——老玩家的全局世界书不能因为升级变成一本空书。
         self.book = llm_worldbook.Worldbook(
-            path=(folder / "worldbook.json") if folder else None
+            path=llm_worldbook.resolve_path(character, folder)
         )
         self.intents = llm_actions.IntentQueue()
         self._job_factory = job_factory or llm_models.BackgroundJob
@@ -78,7 +80,7 @@ class LLMRouter:
         """重读角色卡与世界书（设置页保存后 / 换角色时调）。"""
         self.card, self.card_error = llm_prompt.load_card(self.character, self.folder)
         self.book = llm_worldbook.Worldbook(
-            path=(self.folder / "worldbook.json") if self.folder else None
+            path=llm_worldbook.resolve_path(self.character, self.folder)
         )
         self.book.load()
 
@@ -107,6 +109,12 @@ class LLMRouter:
                 "allow_actions": bool(self.store.config.allow_actions),
                 "intents": self.intents.state(),
                 "worldbook": self.book.state(),
+                # 面板/日志里一眼看出这次生效的是"该角色独有"还是"全局回落"
+                "worldbook_scope": (
+                    "character"
+                    if llm_worldbook.character_path(self.character, self.folder).is_file()
+                    else "global"
+                ),
                 "chats": self.chat.state(),
                 "pending": self.busy,
                 "last_source": self.last_reply.source,

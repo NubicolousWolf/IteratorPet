@@ -35,10 +35,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from .. import characters
 from ..simulation import constants as C
 from ..simulation.lines import Lines
 
-CHARACTERS = (("pebbles", "五块卵石"), ("past_moon", "仰望皓月"))
 # 事件是下拉里的三项；`ritual` 是 2026-10-30 按用户要求补的（仪式成功时说话）
 EVENTS = (("drag", "拖拽"), ("talk", "长时间静止"), ("ritual", "仪式"))
 SILENT = C.DIALOGUE_SILENT_ENTRY
@@ -59,7 +59,12 @@ class DialogueEditor(QDialog):
         self.resize(560, 470)
 
         self.character_box = QComboBox()
-        for key, label in CHARACTERS:
+        # 角色清单来自注册表（v0.2.0）：新建的角色在这里立刻能编台词。
+        # 目录取 `lines.json` 的上一级——台词文件和角色卡永远在同一个数据目录里。
+        self._character_keys = [
+            key for key, _label in characters.names(self.lines.path.parent)
+        ]
+        for key, label in characters.names(self.lines.path.parent):
             self.character_box.addItem(label, key)
         self.event_box = QComboBox()
         for key, label in EVENTS:
@@ -120,7 +125,7 @@ class DialogueEditor(QDialog):
     # -- 数据 ---------------------------------------------------------------
     def _load_draft(self) -> None:
         self._draft = {}
-        for character, _ in CHARACTERS:
+        for character in self._character_keys:
             for event, _ in EVENTS:
                 pool = self.lines.pool(character, event)
                 self._draft[(character, event)] = list(pool) if pool else []

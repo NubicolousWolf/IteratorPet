@@ -1,7 +1,7 @@
-"""「迭代器自定义」工作室：一个窗口三个标签页（v0.1.9）。
+"""「迭代器自定义」工作室：一个窗口三个标签页（v0.1.9 起）。
 
     ┌ 迭代器自定义 ───────────────────────────────────────────────────────┐
-    │ 角色 [ 五块卵石 (pebbles) ▾ ]  [新建…][复制…][删除]（v0.2.0 开放）  │
+    │ 角色 [ 五块卵石 (pebbles · 内置) ▾ ] [新建…][复制…][删除][设为当前角色]│
     │ ┌ 人偶外观 │ 角色卡 │ 世界书 ┐                                      │
     │ │                                                              │   │
     │ │  (当前标签页)                                                │   │
@@ -9,14 +9,16 @@
     │ 状态：…                                        [保存]  [关闭]        │
     └────────────────────────────────────────────────────────────────────┘
 
-三条设计取舍（都是踩过坑才定下来的）：
+四条设计取舍（都是踩过坑才定下来的）：
 
 * **不挂父窗口**：主窗口是整屏透明 `Tool`，挂上去会继承它的事件/焦点属性，
   对话框会跟着变成点不到的样子（`dialogue_editor.py` / `llm_settings.py` 都用 `None`）。
 * **保存是一次性的**：三个标签页各自持草稿，点「保存」才一起落盘。
   切角色时若有未保存改动，先问一句，**不自动保存**——玩家可能只是想看看别人的卡。
-* **世界书是全局一份**（v0.1.9）：切角色不重载它。按角色分文件是 v0.2.0 的事，
-  那时候这里会多一个作用域下拉。
+* **角色清单来自注册表**（`characters.py`），v0.2.0 起不再是写死的两项：
+  新建/复制/删除之后本窗口与桌面菜单同时生效，不需要重开。
+* **删除角色会顺手把桌面切走**：删掉的要是正在跑的那位，不切走就会留下
+  "配置里点着一个不存在的角色、人偶还穿着她的外观"的孤儿状态。
 """
 
 from __future__ import annotations
@@ -27,16 +29,20 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
 )
 
-from ..llm import cards as llm_cards
+from .. import characters
 from ..llm import worldbook as llm_worldbook
+from ..simulation import appearance as ap
 from .card_tab import CardTab
 from .puppet_tab import PuppetTab
 from .worldbook_tab import WorldbookTab
@@ -44,17 +50,85 @@ from .worldbook_tab import WorldbookTab
 _OPEN: list["Workshop"] = []
 
 
+class _CharacterDialog(QDialog):
+    """新建 / 复制角色的小表单：``key``（文件名）+ 显示名 +（新建时）骨骼基底。"""
+
+    def __init__(self, parent, *, copying: str = "", key: str = "", name: str = "",
+                 base: str = "pebbles", show_base: bool = True):
+        super().__init__(parent)
+        self.setWindowTitle("复制角色" if copying else "新建角色")
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setMinimumWidth(420)
+
+        self.key_edit = QLineEdit(key)
+        self.key_edit.setPlaceholderText("小写字母/数字/下划线/减号，例如 seven_red_suns")
+        self.name_edit = QLineEdit(name)
+        self.name_edit.setPlaceholderText("菜单里显示的名字，例如 七轮红日")
+        self.base_box = QComboBox()
+        for token, label in ap.BASE_TEMPLATES.items():
+            self.base_box.addItem(f"{label}（{token}）", token)
+        self.base_box.setCurrentIndex(max(0, self.base_box.findData(base)))
+        self.base_box.setEnabled(show_base)
+
+        form = QFormLayout()
+        form.addRow("key（文件名）", self.key_edit)
+        form.addRow("显示名", self.name_edit)
+        form.addRow("骨骼基底", self.base_box)
+        if copying:
+            hint = QLabel(f"会把「{copying}」的整张卡（含外观与未知字段）原样复制一份。")
+        else:
+            hint = QLabel(
+                "骨骼基底决定眼睛高度、躯干高度与仪式行为（杀鼠标 / 只挣脱）；颜色稍后在人偶外观页调。"
+            )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#777; font-size:11px;")
+
+        self.error = QLabel("")
+        self.error.setWordWrap(True)
+        self.error.setStyleSheet("color:#c0392b;")
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+
+        outer = QVBoxLayout(self)
+        outer.addLayout(form)
+        outer.addWidget(hint)
+        outer.addWidget(self.error)
+        outer.addWidget(buttons)
+
+    def _on_accept(self) -> None:
+        key = self.key_edit.text().strip()
+        error = characters.validate_key(key)
+        if error:
+            self.error.setText(error)      # 就地报错，不关窗——省得玩家重打一遍
+            return
+        self.accept()
+
+    def values(self) -> tuple[str, str, str]:
+        return (
+            self.key_edit.text().strip(),
+            self.name_edit.text().strip(),
+            self.base_box.currentData() or "pebbles",
+        )
+
+
 class Workshop(QDialog):
     def __init__(self, book: llm_worldbook.Worldbook | None = None,
-                 folder: Path | str | None = None, on_saved=None, config=None):
+                 folder: Path | str | None = None, on_saved=None, config=None,
+                 current: str | None = None, on_activate=None):
         super().__init__(None)
         self.folder = Path(folder) if folder is not None else None
         self.on_saved = on_saved
+        self.on_activate = on_activate
         self.config = config
+        self._desktop = current or "pebbles"     # 桌面正在跑哪一位（删角色时要跟着切）
         self.book = book or llm_worldbook.Worldbook(
-            self.folder / "worldbook.json" if self.folder else None
+            llm_worldbook.resolve_path(self._desktop, self.folder)
         )
-        self._refs: list[llm_cards.CardRef] = []
+        self._refs: list[characters.Character] = []
 
         self.setWindowTitle("迭代器自定义")
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
@@ -71,22 +145,28 @@ class Workshop(QDialog):
         top = QHBoxLayout()
         top.addWidget(QLabel("角色"))
         self.character_box = QComboBox()
-        self.character_box.setMinimumWidth(280)
+        self.character_box.setMinimumWidth(300)
         self.character_box.currentIndexChanged.connect(self._on_character)
         top.addWidget(self.character_box, 1)
         self.new_button = QPushButton("新建…")
+        self.new_button.setToolTip("从空卡开始建一个自己的迭代器")
         self.copy_button = QPushButton("复制…")
+        self.copy_button.setToolTip("以当前角色为底复制一份（外观、卡、未知字段全带走）")
         self.delete_button = QPushButton("删除")
-        for button in (self.new_button, self.copy_button, self.delete_button):
-            button.setEnabled(False)
-            button.setToolTip("v0.2.0 开放：创建 / 复制 / 删除自定义迭代器会有角色注册表参与")
+        self.delete_button.setToolTip("只删卡文件；聊天记录与本地台词默认保留")
+        self.activate_button = QPushButton("设为当前角色")
+        self.activate_button.setToolTip("让桌面上的人偶换成这一位")
+        for button in (self.new_button, self.copy_button, self.delete_button,
+                       self.activate_button):
             top.addWidget(button)
         outer.addLayout(top)
 
         self.tabs = QTabWidget()
         self.puppet_tab = PuppetTab(self.folder, config=self.config)
         self.card_tab = CardTab(self.folder)
-        self.worldbook_tab = WorldbookTab(self.book)
+        self.worldbook_tab = WorldbookTab(
+            self.book, folder=self.folder, character=self._desktop
+        )
         self.tabs.addTab(self.puppet_tab, "人偶外观")
         self.tabs.addTab(self.card_tab, "角色卡")
         self.tabs.addTab(self.worldbook_tab, "世界书")
@@ -107,11 +187,15 @@ class Workshop(QDialog):
 
         self.save_button.clicked.connect(self.save)
         self.close_button.clicked.connect(self.close)
+        self.new_button.clicked.connect(self.new_character)
+        self.copy_button.clicked.connect(self.copy_character)
+        self.delete_button.clicked.connect(self.delete_character)
+        self.activate_button.clicked.connect(self.activate_character)
 
     # -- 角色列表 -----------------------------------------------------------
     def _reload_cards(self, keep: str | None = None) -> None:
-        current = keep or getattr(self, "_key", "pebbles")
-        self._refs = llm_cards.list_cards(self.folder)
+        current = keep or getattr(self, "_key", self._desktop)
+        self._refs = characters.characters(self.folder)
         self.character_box.blockSignals(True)
         self.character_box.clear()
         index = 0
@@ -127,12 +211,25 @@ class Workshop(QDialog):
     def _load_character(self, key: str) -> None:
         self._key = key
         ref = next((item for item in self._refs if item.key == key), None)
-        if ref is not None and not ref.builtin:
-            self.delete_button.setEnabled(False)   # v0.2.0 才真的能删
-            self.delete_button.setToolTip("v0.2.0 开放：删除会和历史记录/本地台词一起处理")
+        builtin = bool(ref.builtin) if ref is not None else False
+        self.delete_button.setEnabled(not builtin)
+        self.delete_button.setToolTip(
+            "内置角色不能删除（默认外观写在源码里）" if builtin
+            else "只删卡文件；聊天记录与本地台词默认保留"
+        )
         self.puppet_tab.load(key)
         self.card_tab.load(key)
+        self.worldbook_tab.set_character(key)
+        self._refresh_activate()
         self.status.setText(f"正在编辑：{key}")
+
+    def _refresh_activate(self) -> None:
+        """「设为当前角色」在"本来就是当前角色"时置灰，免得玩家以为点了没反应。"""
+        same = getattr(self, "_key", "") == self._desktop
+        self.activate_button.setEnabled(not same)
+        self.activate_button.setToolTip(
+            "桌面上的就是这一位" if same else "让桌面上的人偶换成这一位"
+        )
 
     def _on_character(self, _index: int) -> None:
         target = self.character_box.currentData()
@@ -151,6 +248,103 @@ class Workshop(QDialog):
                 self.character_box.blockSignals(False)
                 return
         self._load_character(target)
+
+    # -- 生命周期 -----------------------------------------------------------
+    def _perform_create(self, key: str, name: str, base: str) -> tuple[str, str]:
+        """真建一个角色 → ``(新 key, 错误)``。对话框之外的逻辑都在这儿（可测）。"""
+        ref, error = characters.create(key, name, base, self.folder)
+        if error or ref is None:
+            return "", error or "原因未知"
+        self._reload_cards(keep=ref.key)
+        return ref.key, ""
+
+    def new_character(self) -> None:
+        dialog = _CharacterDialog(self, show_base=True)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        key, name, base = dialog.values()
+        new_key, error = self._perform_create(key, name, base)
+        if error:
+            QMessageBox.warning(self, "新建失败", error)
+            return
+        self.status.setText(
+            f"已新建「{new_key}」——接着改卡和颜色，点保存才写进文件"
+        )
+
+    def _perform_duplicate(self, source: str, key: str, new_name: str) -> tuple[str, str]:
+        ref, error = characters.duplicate(source, key, new_name, self.folder)
+        if error or ref is None:
+            return "", error or "原因未知"
+        self._reload_cards(keep=ref.key)
+        return ref.key, ""
+
+    def copy_character(self) -> None:
+        source = getattr(self, "_key", "")
+        if not source:
+            return
+        name = next((r.name for r in self._refs if r.key == source), source)
+        dialog = _CharacterDialog(
+            self, copying=name, key=f"{source}_copy", name=f"{name}（副本）", show_base=False
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        key, new_name, _base = dialog.values()
+        new_key, error = self._perform_duplicate(source, key, new_name)
+        if error:
+            QMessageBox.warning(self, "复制失败", error)
+            return
+        self.status.setText(f"已复制成「{new_key}」")
+
+    def _perform_delete(self, key: str, drop_chats: bool = False) -> str:
+        """真删：删卡 → 如果删的是桌面上那位，**先把桌面切走**。返回错误串。
+
+        "先切走"这段不是贴心，是防孤儿状态：配置里点着一个不存在的角色时，
+        人偶还穿着她的外观，而菜单里一项都不打勾——玩家会以为"我删了个假的"。
+        """
+        error = characters.delete(key, self.folder, drop_chats=drop_chats)
+        if error:
+            return error
+        if key == self._desktop:
+            self.activate_character(characters.BUILTIN_KEYS[0], silent=True)
+        self._reload_cards(keep=self._desktop)
+        return ""
+
+    def delete_character(self) -> None:
+        key = getattr(self, "_key", "")
+        ref = next((item for item in self._refs if item.key == key), None)
+        if ref is None or ref.builtin:
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("删除角色")
+        box.setText(
+            f"删除「{ref.name}」（{ref.key}）？\n\n"
+            f"卡文件 characters/{ref.key}.json 会被移除。"
+        )
+        keep = box.addButton("删除（保留聊天记录）", QMessageBox.ButtonRole.AcceptRole)
+        wipe = box.addButton("连同聊天记录一起删", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked not in (keep, wipe):
+            return
+        error = self._perform_delete(key, drop_chats=(clicked is wipe))
+        if error:
+            QMessageBox.warning(self, "删除失败", error)
+            return
+        self.status.setText(f"已删除「{ref.name}」（{ref.key}）")
+
+    def activate_character(self, key: str | None = None, silent: bool = False) -> None:
+        """把这一位设为桌面角色（顺带记住，`删除` 用它判断要不要切走）。"""
+        target = key or getattr(self, "_key", "")
+        if not target or target == self._desktop:
+            return
+        if callable(self.on_activate):
+            self.on_activate(target)
+        self._desktop = target
+        self._refresh_activate()
+        if not silent:
+            name = next((r.name for r in self._refs if r.key == target), target)
+            self.status.setText(f"桌面角色已切换到「{name}」")
 
     # -- 保存 ---------------------------------------------------------------
     def _any_dirty(self) -> bool:
@@ -203,10 +397,12 @@ class Workshop(QDialog):
         event.accept()
 
 
-def show_workshop(book=None, folder=None, on_saved=None, config=None) -> Workshop:
+def show_workshop(book=None, folder=None, on_saved=None, config=None,
+                  current: str | None = None, on_activate=None) -> Workshop:
     """打开（或复用）一个工作室窗口；引用留在模块里，防止被 Python 回收。"""
     global _OPEN
-    workshop = Workshop(book=book, folder=folder, on_saved=on_saved, config=config)
+    workshop = Workshop(book=book, folder=folder, on_saved=on_saved, config=config,
+                        current=current, on_activate=on_activate)
     _OPEN.append(workshop)
 
     def _forget(*_args) -> None:

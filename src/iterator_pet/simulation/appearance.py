@@ -171,6 +171,35 @@ HEADPIECE_MODES = {
 }
 
 
+def default_headpiece_mode(key: str) -> str:
+    """头顶部件的默认模式：内置两位 ``inherit``，自定义角色 ``none``。
+
+    自定义角色套了皓月模板时**不该白得一颗第三只眼**（用户 2026-10-31 澄清：
+    要改的是"自定义角色套模板时的默认值"，不是删掉仰望皓月本人的那颗）。
+    """
+    return "inherit" if key in CHARACTERS else "none"
+
+
+def apply_headpiece_default(key: str, draft: dict | None) -> dict:
+    """把"头顶部件默认值"补进外观草稿 → 新字典（不改入参）。
+
+    为什么要有这个函数：**预览与桌面必须用同一份默认值**。v0.1.9 的工坊预览
+    走 ``puppet_tab.collect()``（自定义角色写了 ``headpiece_mode="none"``），
+    而桌面走 ``appearance_of`` 直接读卡——卡里没这个键时两边结论相反，
+    就会出现"预览里没有圆点、桌面上多一颗"这种最难查的偏差。
+
+    ``inherit`` 是"什么都不写"：内置两位在卡里没有外观块时必须继续命中
+    ``build_appearance`` 的"直接返回模板"那条早退（= 100% 源码数值）。
+    """
+    draft = dict(draft or {})
+    if str(draft.get("headpiece_mode") or "").strip():
+        return draft
+    mode = default_headpiece_mode(key)
+    if mode != "inherit":
+        draft["headpiece_mode"] = mode
+    return draft
+
+
 def _rgb(value) -> tuple[int, int, int] | None:
     colour = normalize_colour(value)
     if colour is None:

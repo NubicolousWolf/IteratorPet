@@ -48,6 +48,7 @@ GROUPS = {
     "test_file_drop": "llm",
     "test_llm_templates": "llm",
     "test_workshop_v019": "workshop",
+    "test_custom_iterator_v020": "workshop",
 }
 
 

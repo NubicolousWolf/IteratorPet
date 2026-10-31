@@ -330,8 +330,10 @@ def test_workshop_opens_with_three_tabs_and_saves_both_files(tmp_path):
         "人偶外观", "角色卡", "世界书"
     ]
     assert workshop.puppet_tab.preview._snapshot is not None, "预览必须有真实快照"
-    assert workshop.new_button.isEnabled() is False, "v0.1.9 先置灰"
-    assert workshop.delete_button.isEnabled() is False
+    # v0.2.0 解锁了新建/复制；删除只对自定义角色开放（内置两位是源码数值，删了也还在）
+    assert workshop.new_button.isEnabled() is True
+    assert workshop.copy_button.isEnabled() is True
+    assert workshop.delete_button.isEnabled() is False, "内置角色不能删"
 
     workshop.puppet_tab.buttons["skin"].set_colour("#123456")
     workshop.puppet_tab._on_colour()

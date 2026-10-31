@@ -27,6 +27,9 @@
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -37,6 +40,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -58,17 +62,27 @@ def _keys_to_text(keys) -> str:
 
 
 class WorldbookTab(QWidget):
-    """读写 ``worldbook.json``（v0.1.9 是**全局一份**；按角色分文件在 v0.2.0）。"""
+    """读写世界书。
+
+    v0.1.9 只有**全局一份** ``worldbook.json``；v0.2.0 起每个角色可以有自己的
+    ``worldbooks/<key>.json``，作用域下拉框就在最上面那行。**判定只有一条**：
+    独立那份文件存在 → 用它；不存在 → 无缝回落全局（和 ``llm/worldbook.resolve_path``
+    同一口径，所以"界面上看到的作用域"永远等于"下一句话实际用的那份"）。
+    """
 
     changed = Signal()
 
-    def __init__(self, book: wb.Worldbook, parent=None):
+    def __init__(self, book: wb.Worldbook, folder: Path | str | None = None,
+                 character: str = "pebbles", parent=None):
         super().__init__(parent)
         self.book = book
+        self.folder = Path(folder) if folder is not None else None
+        self.character = character
         self._entries: list[wb.Entry] = []
         self._current: int = -1
         self._dirty = False
         self._build()
+        self._refresh_scope()
         self.reload()
 
     # -- 构建 ---------------------------------------------------------------
@@ -76,6 +90,22 @@ class WorldbookTab(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 10, 12, 8)
         outer.setSpacing(8)
+
+        # 作用域放在最上面：它决定下面这一屏改的是哪个文件，藏起来就会出现
+        # "我明明改了，她怎么还用旧的"。
+        scope = QHBoxLayout()
+        scope.addWidget(QLabel("作用域"))
+        self.scope_box = QComboBox()
+        self.scope_box.setMinimumWidth(320)
+        self.scope_box.currentIndexChanged.connect(self._on_scope)
+        scope.addWidget(self.scope_box, 1)
+        self.fork_button = QPushButton("复制全局到该角色")
+        self.fork_button.setToolTip(
+            "把 worldbook.json 原样复制成 worldbooks/<角色>.json，作为独立世界书的起点"
+        )
+        self.fork_button.clicked.connect(self.fork_from_global)
+        scope.addWidget(self.fork_button)
+        outer.addLayout(scope)
 
         top = QHBoxLayout()
         self.scan_depth = QSpinBox()
@@ -212,9 +242,109 @@ class WorldbookTab(QWidget):
         for widget in (self.keys, self.secondary_keys, self.content):
             widget.textChanged.connect(self._mark_dirty)
 
+    # -- 作用域（全局 / 该角色）------------------------------------------------
+    def _own_path(self) -> Path:
+        return wb.character_path(self.character, self.folder)
+
+    def _refresh_scope(self) -> None:
+        """把下拉框刷成"现在这一屏改的是哪个文件"。
+
+        选中项按 ``self.book.path`` 判断（不是按文件在不在）：玩家可能刚选到
+        "该角色独立"、还没点保存，文件确实不存在，但这一屏的内容就是冲着它去的。
+        文件在不在由标签里的「已有 / 还没有」明说——那句话同时也是
+        ``resolve_path`` 的判据，所以"标签"和"下一句话实际用哪份"永远一致。
+        """
+        own = self._own_path()
+        exists = own.is_file()
+        self.scope_box.blockSignals(True)
+        self.scope_box.clear()
+        self.scope_box.addItem("共用全局世界书（worldbook.json）", "global")
+        mark = "已有" if exists else "还没有（保存后才有）"
+        self.scope_box.addItem(
+            f"「{self.character}」独立世界书（worldbooks/{own.name} · {mark}）", "own"
+        )
+        on_own = Path(self.book.path) == own
+        self.scope_box.setCurrentIndex(1 if on_own else 0)
+        self.scope_box.blockSignals(False)
+        self.fork_button.setEnabled(not exists)
+
+    def set_character(self, key: str) -> None:
+        """换角色：重算作用域，并切到"她实际在用的那份"。
+
+        调用方（工作室）负责在切角色前问过"还有没保存的改动"；这里不再问一次。
+        """
+        if not key or key == self.character:
+            return
+        self.character = key
+        self._switch_book(wb.resolve_path(key, self.folder))
+
+    def _on_scope(self, _index: int) -> None:
+        if not self._maybe_lose_changes():
+            self._refresh_scope()          # 玩家取消 → 选择退回"文件真实状态"
+            return
+        if (self.scope_box.currentData() or "global") == "global":
+            self._switch_book(wb.global_path(self.folder))
+            return
+        own = self._own_path()
+        if not own.is_file():
+            answer = QMessageBox.question(
+                self, "还没有独立世界书",
+                f"「{self.character}」还没有自己的世界书。\n"
+                "要不要把现在的全局世界书复制一份作为起点？（推荐；之后她与别的角色互不影响）",
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.fork_from_global()
+                return
+        self._switch_book(own)
+
+    def fork_from_global(self) -> None:
+        """把全局世界书**原样复制**成这个角色的独立一份。
+
+        复制文件而不是 load→save：玩家手改的缩进、未知顶层键、条目顺序一点都不该变
+        （那正是"我们只搬位置、不改内容"的意思）。
+        """
+        source = wb.global_path(self.folder)
+        target = self._own_path()
+        if target.is_file():
+            QMessageBox.information(
+                self, "已经有独立世界书",
+                f"worldbooks/{target.name} 已经存在了，直接编辑它就行（作用域切过去即可）。",
+            )
+            return
+        if not source.is_file():
+            QMessageBox.information(
+                self, "全局世界书还不存在",
+                "根目录还没有 worldbook.json，所以没东西可复制。\n"
+                "先切到「共用全局世界书」建几条，或者就在这里从空白开始写。",
+            )
+            return
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+        except OSError as exc:
+            QMessageBox.warning(self, "复制失败", f"{type(exc).__name__}: {exc}")
+            return
+        self._switch_book(target)
+
+    def _switch_book(self, path: Path) -> None:
+        path = Path(path)
+        if self.book.path != path:
+            self.book = wb.Worldbook(path)
+            self.reload()                 # reload() 内部 book.load()
+        self._refresh_scope()
+
+    def _maybe_lose_changes(self) -> bool:
+        if not self._dirty:
+            return True
+        answer = QMessageBox.question(
+            self, "有未保存的世界书改动",
+            "世界书还有没保存的改动，切换作用域会丢掉。要继续吗？",
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
     # -- 载入 / 保存 ---------------------------------------------------------
     def reload(self) -> None:
-        """从磁盘重读（切换角色时不动它：v0.1.9 的世界书是全局一份）。"""
+        """从磁盘重读当前作用域那份文件。"""
         self.book.load()
         self._entries = list(self.book.entries)
         self.scan_depth.blockSignals(True)
@@ -249,6 +379,7 @@ class WorldbookTab(QWidget):
         if not self.book.save(force=force):
             return self.book.last_error or "保存失败（原因未知）"
         self._dirty = False
+        self._refresh_scope()          # 第一次保存独立世界书后，标签从「还没有」变「已有」
         return ""
 
     def last_error(self) -> str:

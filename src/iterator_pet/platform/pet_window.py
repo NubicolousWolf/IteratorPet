@@ -12,6 +12,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
 from ..config import SIZE_PRESETS, Config, load, save, scale_for
+from .. import characters
 from ..llm import config as llm_config
 from ..llm import templates as llm_templates
 from ..rendering.hit import hit_test
@@ -80,13 +81,17 @@ class PetWindow(PetCanvas):
         self.llm.load()
         self.llm.upgrade()                # 老文件缺的新字段补上（只加不改）
         self.dialogue_enabled = bool(getattr(config, 'dialogue_enabled', True))
+        # 角色：先过一遍注册表（``config.character`` 可能指向一个已经被玩家删掉的 key），
+        # 再让她决定外观。v0.1.9 及以前这里只有 ``CHARACTERS`` 两个常量，卡里的
+        # 外观草稿根本没人读——那就是"工坊里改了、桌面上没变"的根因。
+        self._character = characters.resolve_key(getattr(config, "character", "pebbles"))
+        config.character = self._character
+        self.simulation.appearance = characters.appearance_of(self._character)
         # LLM 路由器交给仿真持有（仿真每 tick 用；这里只负责造出来和换角色）。
         # 没 key / 没模型时 `router.enabled` 为假，仿真会走本地台词池，一行不差。
         from ..llm.route import LLMRouter
 
-        self.simulation.llm = LLMRouter(
-            self.llm, character=self.simulation.appearance.key
-        )
+        self.simulation.llm = LLMRouter(self.llm, character=self._character)
         self.simulation.dialogue_enabled = self.dialogue_enabled
         self.apply_llm_settings()
         self.click_through = bool(config.click_through)
@@ -366,19 +371,28 @@ class PetWindow(PetCanvas):
     def open_workshop(self) -> None:
         """打开「迭代器自定义」工作室（人偶外观 / 角色卡 / 世界书 三合一）。
 
-        v0.1.9 的范围：三个页签都能**真读写**磁盘上的 `characters/*.json` 与
-        `worldbook.json`；人偶页的配色与像素头饰存进角色的 `extensions.rainworld.appearance`
-        并在页内预览，**但还不会应用到桌面人偶**（那是 v0.2.0）。
+        v0.2.0 起这里是**真编辑**：外观改完保存后，如果改的就是桌面上的这位，
+        人偶当场换色换头饰（`_after_workshop_save` → `apply_character_appearance`）；
+        新建/复制/删除角色会立刻反映到菜单与对话编辑器（都现扫注册表）。
 
-        保存后调 `_reload_llm()`：世界书与角色卡都是路由器下一句话就要用的东西，
+        保存后还要 `_reload_llm()`：世界书与角色卡都是路由器下一句话就要用的东西，
         不重载就等于"改了没生效"。
         """
         from .workshop import show_workshop
 
         router = self.simulation.llm
         book = getattr(router, "book", None) if router is not None else None
-        self._workshop = show_workshop(book=book, folder=None, on_saved=self._reload_llm,
-                                       config=self.config)
+        self._workshop = show_workshop(
+            book=book, folder=None, config=self.config,
+            current=self.character,
+            on_saved=self._after_workshop_save,
+            on_activate=self.set_character,
+        )
+
+    def _after_workshop_save(self) -> None:
+        """工作室点了「保存」：重读卡与世界书，并把当前角色的外观重新合成一次。"""
+        self._reload_llm()
+        self.apply_character_appearance()
 
     def open_data_folder(self) -> None:
         """打开数据文件夹（打包版 = 启动.exe 旁边；只读介质下才是 `%LOCALAPPDATA%`）。
@@ -661,23 +675,36 @@ class PetWindow(PetCanvas):
     def character(self) -> str:
         return getattr(self.config, "character", "pebbles")
 
+    def character_list(self) -> list[tuple[str, str]]:
+        """``[(key, 显示名), ...]``，菜单用。**每次展开菜单现扫**：玩家可能刚在工作室里
+        建/删了一个角色，菜单要是启动时算好的那一份，就会显示一个已经不存在的角色。"""
+        return characters.names()
+
+    def apply_character_appearance(self) -> None:
+        """把**当前角色**的外观从卡片重新合成一次（保存后热更新用）。
+
+        只读一张卡、重算一个 frozen dataclass，没有 QPixmap 缓存要清：
+        渲染层每帧都读 ``state.appearance``，所以换完下一帧就变了。
+        """
+        self.simulation.appearance = characters.appearance_of(self.character)
+        self.update()
+
     def set_character(self, key: str) -> None:
-        """切换角色（托盘「角色」菜单）。外观参数在 simulation/appearance.py。
+        """切换角色（托盘 / 右键菜单 / 工作室的「设为当前角色」）。
 
         只换外观，**仿真一行不动**：所以不重建 SimulationState，只把 appearance
         换掉再刷一帧。换角色时结束拖拽与仪式（避免"她的白光"这种跨角色的残留状态）。
         """
-        from ..simulation.appearance import CHARACTERS
-
-        if key not in CHARACTERS or key == self.character:
+        if not characters.exists(key) or key == self.character:
             return
         self.simulation.end_drag(fling=False)
         self.simulation.kill.cancel()
         self.simulation.cancel_dialogue()        # 换角色不许串台词（审计 A3）
         self.config.character = key
-        self.simulation.appearance = CHARACTERS[key]
+        self.simulation.appearance = characters.appearance_of(key)
         if self.simulation.llm is not None:
-            self.simulation.llm.set_character(key)      # 换角色 → 换角色卡与历史
+            self.simulation.llm.set_character(key)      # 换角色 → 换角色卡/世界书/历史
+        self.simulation.lines.reload(force=True)  # 新角色可能有自己的台词组
         self.update()
         save(self.config)
 
@@ -761,7 +788,7 @@ class PetWindow(PetCanvas):
             spark_menu.addAction(action_rate)
 
         character_menu = menu.addMenu("角色")
-        for key, label in (("pebbles", "五块卵石"), ("past_moon", "仰望皓月")):
+        for key, label in self.character_list():
             action_character = QAction(label, character_menu)
             action_character.setCheckable(True)
             action_character.setChecked(self.character == key)

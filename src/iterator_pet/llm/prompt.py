@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import actions as llm_actions
@@ -114,6 +114,21 @@ FALLBACK_CARDS = {
     ),
 }
 
+#: 自定义角色（v0.2.0 起玩家自己建的）没有卡、或卡里没填 ``system_prompt`` 时的兜底。
+#:
+#: **不能再用 ``FALLBACK_CARDS["pebbles"]``**：那会让玩家新建的"七轮红日"一开口
+#: 就自称五块卵石——串台比空白更难发现。中性兜底只说"一个迭代器"。
+NEUTRAL_CARD = Card(
+    name="",
+    personality="",
+    scenario="",
+    system_prompt=(
+        "你扮演《雨世界》里的一位迭代器：一座巨大的机械生命，"
+        "语言克制、说话简短。不要自称是别的迭代器。"
+    ),
+    post_history_instructions="用一句中文回答，不超过 40 字。不用括号描写动作，不自称 AI。",
+)
+
 
 def card_path(character: str, folder: Path | None = None) -> Path:
     folder = folder or llm_config_path()
@@ -127,21 +142,46 @@ def llm_config_path() -> Path:
 
 
 def load_card(character: str, folder: Path | None = None) -> tuple[Card, str]:
-    """读角色卡 → ``(card, error)``。坏文件不覆盖，退回内置兜底。"""
-    fallback = FALLBACK_CARDS.get(character, FALLBACK_CARDS["pebbles"])
+    """读角色卡 → ``(card, error)``。坏文件不覆盖，退回兜底卡。
+
+    兜底的选取（v0.2.0 改）：**内置两位用各自的 FALLBACK，其它角色用中性卡**。
+    以前一律退回五块卵石，玩家新建的自定义迭代器会顶着她的人设说话。
+
+    两种兜底的区别要保住（这是 2026-10-31 修过一次的回归）：
+
+    * **文件不存在 / 是坏 JSON** → 交出一整张兜底卡（含 personality / scenario /
+      post_history_instructions），否则拼出来的 prompt 会少掉结尾那段系统指令；
+    * **文件在、只是某几项空着** → 只补 ``system_prompt`` 与 ``name``，
+      别的字段就是玩家故意空着的，不许我们替他填。
+    """
+    fallback = FALLBACK_CARDS.get(character) or NEUTRAL_CARD
     path = card_path(character, folder)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except OSError:
-        return fallback, ""
+        return _full_fallback(fallback, character), ""
     except ValueError as exc:
-        return fallback, f"角色卡不是合法 JSON（{exc}），本次用内置兜底"
+        return (
+            _full_fallback(fallback, character),
+            f"角色卡不是合法 JSON（{exc}），本次用内置兜底",
+        )
     card = Card.from_dict(raw)
+    return _fill_two(card, fallback, character), ""
+
+
+def _full_fallback(fallback: Card, character: str) -> Card:
+    """整张兜底卡。**返回副本**：直接交出 ``FALLBACK_CARDS`` 里那个对象，
+    调用方一旦改它（例如补 name），就会污染下一次请求。"""
+    return replace(fallback, name=fallback.name or character)
+
+
+def _fill_two(card: Card, fallback: Card, character: str) -> Card:
+    """补卡里空着的两项：``system_prompt`` 与 ``name``（中性兜底卡两者都可能是空的）。"""
     if not card.system_prompt:
         card.system_prompt = fallback.system_prompt
     if not card.name:
-        card.name = fallback.name
-    return card, ""
+        card.name = fallback.name or character
+    return card
 
 
 # -------------------------------------------------------------------- 情境 --

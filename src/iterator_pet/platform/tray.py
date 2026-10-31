@@ -137,7 +137,8 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
 
     character_menu = menu.addMenu("角色")
     current_character = getattr(window, "character", "pebbles")
-    for key, label in (("pebbles", "五块卵石"), ("past_moon", "仰望皓月")):
+    # 现扫注册表：玩家可能刚在工作室里新建/删掉一个角色（v0.2.0）
+    for key, label in window.character_list():
         action_character = QAction(label, character_menu)
         action_character.setCheckable(True)
         action_character.setChecked(current_character == key)

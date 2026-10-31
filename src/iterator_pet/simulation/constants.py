@@ -669,6 +669,17 @@ DIALOGUE_RITUAL_COOLDOWN = 2400
 DIALOGUE_RELOAD_TICKS = 80           # 热重载：每 2 s 查一次 mtime
 DIALOGUE_SILENT_ENTRY = "（不触发对话）"
 
+#: 自定义角色（v0.2.0 起玩家自己建的）在 ``lines.json`` 里还没有台词组时说什么。
+#:
+#: 用**省略号**是刻意的：它是"还没写台词"的占位，玩家一眼就知道该去
+#: 「自定义对话」里填；如果这里塞一句完整的话，玩家会以为那是设计好的台词，
+#: 于是永远不去改（新建的角色就这样顶着一句别人的话说话了）。
+DIALOGUE_NEUTRAL_POOL = {
+    "drag": ["……"],
+    "talk": ["……"],
+    "ritual": ["……"],
+}
+
 # 默认对话池（可在 lines.json 里自行增删）
 DEFAULT_LINES = {
     "version": 1,

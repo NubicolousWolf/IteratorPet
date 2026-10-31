@@ -398,6 +398,38 @@ class Worldbook:
 
 
 def _default_path() -> Path:
+    return global_path()
+
+
+def _base_folder(folder: Path | str | None = None) -> Path:
+    if folder is not None:
+        return Path(folder)
     from ..config import data_dir
 
-    return data_dir() / "worldbook.json"
+    return data_dir()
+
+
+def global_path(folder: Path | str | None = None) -> Path:
+    """共用世界书：``<数据目录>/worldbook.json``（v0.1.8 起老玩家就在这儿）。"""
+    return _base_folder(folder) / "worldbook.json"
+
+
+def character_path(character: str, folder: Path | str | None = None) -> Path:
+    """某个角色的独立世界书：``<数据目录>/worldbooks/<key>.json``。
+
+    key 进文件名前先洗一遍（只留 ASCII 小写/数字/下划线/减号）：这个函数也可能
+    被"角色已经不在注册表里"的旧配置调到，不能让它写出 ``../x.json``。
+    """
+    safe = re.sub(r"[^a-z0-9_-]", "_", str(character or "").lower()) or "unknown"
+    return _base_folder(folder) / "worldbooks" / f"{safe}.json"
+
+
+def resolve_path(character: str, folder: Path | str | None = None) -> Path:
+    """该用哪一份世界书：**有独立的那份就用它，没有就无缝回落到全局**。
+
+    回落是硬要求（计划 §3.3）：v0.1.8/v0.1.9 的老玩家只有根目录一份
+    ``worldbook.json``，升级后必须照旧生效，不能因为"没有 worldbooks/ 目录"
+    就变成一本空书。
+    """
+    own = character_path(character, folder)
+    return own if own.is_file() else global_path(folder)

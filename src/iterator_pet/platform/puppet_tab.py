@@ -627,7 +627,9 @@ class PuppetTab(QWidget):
         self.key = key
         self._loading = True
         try:
-            draft = llm_cards.read_appearance(key, self.folder)
+            draft = ap.apply_headpiece_default(
+                key, llm_cards.read_appearance(key, self.folder)
+            )
             base = str(draft.get("base_template") or "")
             if base not in ap.BASE_TEMPLATES:
                 base = key if key in ap.BASE_TEMPLATES else "pebbles"
@@ -648,7 +650,9 @@ class PuppetTab(QWidget):
                 self.buttons[field].set_colour(_hex(value))
             # 内置两位默认"跟随基底"（皓月那颗圆点是她的源码外观）；自定义角色默认"无"——
             # 不该因为套了皓月模板就白得一颗第三只眼（用户 2026-10-31 澄清）。
-            default_mode = "inherit" if key in ap.CHARACTERS else "none"
+            # 这条默认值现在只有 `appearance.default_headpiece_mode` 一份，
+            # 桌面渲染走同一条（否则预览与桌面会结论相反）。
+            default_mode = ap.default_headpiece_mode(key)
             mode = str(draft.get("headpiece_mode") or default_mode)
             if mode not in self.mode_buttons:
                 mode = "none"
@@ -727,7 +731,7 @@ class PuppetTab(QWidget):
             "pod_colour": list(template.pod_colour),
             "pod_rim_colour": list(template.pod_rim_colour),
             "antenna_colour": list(template.antenna_colour),
-            "headpiece_mode": "inherit" if self.key in ap.CHARACTERS else "none",
+            "headpiece_mode": ap.default_headpiece_mode(self.key),
         }
 
     def save(self) -> str:

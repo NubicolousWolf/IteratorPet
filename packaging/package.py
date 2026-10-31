@@ -62,15 +62,16 @@ def main() -> int:
     # 根目录那些运行时文件**拷完之后逐个删**，作用域精确到根。
     #
     # 为什么必须删：llm.json 里有开发机的**明文 api_key**（审计 A9）；chats/ 是真实
-    # 对话历史（隐私）；config.json 带开发机设置；worldbook.json / characters/ 在根目录
-    # 是开发机自己改过的那份，随包模板的真相源是 `assets/llm/`，不能两处漂移。
+    # 对话历史（隐私）；config.json 带开发机设置；worldbook.json / characters/ /
+    # worldbooks/ 在根目录是开发机自己改过的那份，随包模板的真相源是 `assets/llm/`，
+    # 不能两处漂移。
     skip = shutil.ignore_patterns("cache", "sprites")
     shutil.copytree(dist, stage, ignore=skip)
     for name in ("config.json", "launcher.log", "llm.json", "worldbook.json"):
         target = stage / name
         if target.is_file():
             target.unlink()
-    for name in ("chats", "characters"):
+    for name in ("chats", "characters", "worldbooks"):
         target = stage / name
         if target.is_dir():
             shutil.rmtree(target)
@@ -107,7 +108,7 @@ def main() -> int:
         if not (llm_assets / relative).is_file():
             problems.append(f"缺包内模板 assets/llm/{relative}")
     for leaked in ("llm.json", "worldbook.json", "config.json", "launcher.log",
-                   "chats", "characters", "cache"):
+                   "chats", "characters", "worldbooks", "cache"):
         if (stage / leaked).exists():
             problems.append(f"根目录泄漏了运行时数据：{leaked}")
     if problems:
