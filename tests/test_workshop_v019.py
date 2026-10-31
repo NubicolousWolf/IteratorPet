@@ -475,6 +475,32 @@ def test_a_stored_art_of_the_wrong_size_is_fitted_to_the_board(tmp_path):
     assert (tab.canvases["headpiece"].art.w, tab.canvases["headpiece"].art.h) == (24, 20)
 
 
+def test_a_short_window_never_clips_a_board(tmp_path):
+    """窗口压矮时，画板**只能出滚动条，不能被裁**。
+
+    用户 2026-10-31 报「天线画板下半部分截断」：固定尺寸的控件塞进小容器，Qt 会直接裁掉，
+    既不报错也不缩。每块画板现在都套在 QScrollArea 里，这条断言同时钉住
+    "控件尺寸 = 画布尺寸 × 格宽"和"可见区域 = 整个控件"。
+    """
+    from iterator_pet.platform.workshop import Workshop
+
+    (tmp_path / "characters").mkdir(parents=True)
+    workshop = Workshop(book=wb.Worldbook(tmp_path / "worldbook.json"), folder=tmp_path)
+    workshop.resize(1165, 460)          # 比默认 720 矮得多
+    workshop.show()
+    APP.processEvents()
+    tab = workshop.puppet_tab
+    for index, (key, _title, width, height, cell, _ref) in enumerate(BOARDS):
+        tab.board_box.setCurrentIndex(index)
+        APP.processEvents()
+        canvas = tab.canvases[key]
+        assert (canvas.width(), canvas.height()) == (width * cell, height * cell)
+        visible = canvas.visibleRegion().boundingRect()
+        assert (visible.width(), visible.height()) == (canvas.width(), canvas.height()), \
+            f"{key} 画板被容器裁掉了"
+    workshop.close()
+
+
 def test_both_boards_carry_a_reference_outline():
     """参考线曾经整个消失过：`_paint_reference` 判的是 "head"，而构造时传的是 "headpiece"。
 

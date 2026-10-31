@@ -29,12 +29,14 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -71,7 +73,7 @@ ANTENNA_FIELDS = (
 #: 盖掉大半，画什么也看不出原样。留一块画不动的画板比没有更糟。
 BOARDS = (
     ("headpiece", "头顶部件 24×20", DEFAULT_W, DEFAULT_H, 11, "head"),
-    ("antenna", "天线 8×24（左右镜像）", 8, 24, 11, "antenna"),
+    ("antenna", "天线 8×24（左右镜像）", 8, 24, 9, "antenna"),
 )
 
 #: 每个画板该有多大。**控件尺寸、画布数据尺寸、参考线都从这一个表来**——
@@ -515,13 +517,16 @@ class PuppetTab(QWidget):
             canvas.changed.connect(self._on_draw)
             canvas.picked.connect(self._on_picked)
             self.canvases[key] = canvas
-            page = QWidget()
-            page_box = QVBoxLayout(page)
-            page_box.setContentsMargins(0, 0, 0, 0)
-            page_box.addWidget(canvas, 0, Qt.AlignmentFlag.AlignLeft)
-            page_box.addStretch(1)
+            # **必须套滚动区**：窗口一矮，布局会把画布往下裁（用户 2026-10-31 报
+            # "画板下半部分截断"）。固定尺寸的子控件塞进小容器，Qt 只会把它裁掉，
+            # 不会报错也不会缩——套上 QScrollArea 之后，空间不够就出滚动条，一个像素不丢。
+            page = QScrollArea()
+            page.setFrameShape(QFrame.Shape.NoFrame)
+            page.setWidgetResizable(False)          # 画布保持 1:1，绝不为布局让路
+            page.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            page.setWidget(canvas)
             self.stack.addWidget(page)
-        centre.addWidget(self.stack)
+        centre.addWidget(self.stack, 1)
 
         io = QHBoxLayout()
         self.import_button = QPushButton("导入 PNG…")
@@ -532,8 +537,13 @@ class PuppetTab(QWidget):
         io.addStretch(1)
         centre.addLayout(io)
 
+        sizes = "　".join(
+            f"{title.split(' ')[0]} {width}×{height}"
+            for _k, title, width, height, _c, _r in BOARDS
+        )
         self.hint = QLabel(
-            "左键画、右键擦、Alt 取色。头顶画板的虚线是头与双眼的位置。"
+            f"画板：{sizes}（每格像素固定，窗口再小也只会出滚动条，不会裁掉）。"
+            "左键画、右键擦、Alt 取色。"
             "配色与画板会存进角色卡；应用到桌面人偶与新建角色在 v0.2.0。"
         )
         self.hint.setWordWrap(True)
