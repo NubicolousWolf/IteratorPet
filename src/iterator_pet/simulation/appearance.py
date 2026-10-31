@@ -133,23 +133,9 @@ CHARACTERS = {"pebbles": PEBBLES, "past_moon": PAST_MOON}
 BASE_TEMPLATES = {"pebbles": "五块卵石", "past_moon": "仰望皓月"}
 
 HEADPIECE_MODES = {
-    "none": "无",
-    "builtin_dot": "原版圆点（第三只眼）",
+    "none": "无（跟随基底：源码有几个部件就画几个）",
     "pixel": "自定义像素画",
 }
-
-
-def default_third_eye_colour(skin: tuple[int, int, int]) -> tuple[int, int, int]:
-    """``og.cs:2373-2376``：``Color.Lerp(magenta, skin, 0.3)``。
-
-    五块卵石本来没有第三只眼，玩家给自定义角色打开"原版圆点"时用这个式子现算一个
-    ——**照源码算，不是拍一个颜色**。
-    """
-    return (
-        int(255 + (skin[0] - 255) * 0.3),
-        int(0 + (skin[1] - 0) * 0.3),
-        int(255 + (skin[2] - 255) * 0.3),
-    )
 
 
 def _rgb(value) -> tuple[int, int, int] | None:
@@ -197,29 +183,19 @@ def build_appearance(key: str, base: str = "pebbles", override: dict | None = No
 
     skin = patch.get("skin", template.skin)
     mode = str(override.get("headpiece_mode") or "").strip().lower()
-    if mode == "none":
-        patch["third_eye"] = False
-        patch["third_eye_colour"] = None
-        patch["headpiece"] = None
-    elif mode == "builtin_dot":
-        patch["third_eye"] = True
-        patch["third_eye_colour"] = (
-            _rgb(override.get("third_eye_colour"))
-            or template.third_eye_colour
-            or default_third_eye_colour(skin)
-        )
-        patch["headpiece"] = None
-    elif mode == "pixel":
+    if mode == "pixel":
         art = PixelArt.from_dict(override.get("headpiece_pixels"))
         if art is not None and not art.is_empty():
             patch["headpiece"] = art
+            # 玩家自己画了头饰 → 不再叠源码那颗第三只眼（那就是"被自定义替代"）
             patch["third_eye"] = False
             patch["third_eye_colour"] = None
         else:
-            # 选了"自定义像素画"但画布是空的 → 当作无头饰，别留一个看不见的状态
+            # 选了"自定义像素画"但画布是空的 → 当作没开，别留一个看不见的状态
             patch["headpiece"] = None
-            patch["third_eye"] = False
-            patch["third_eye_colour"] = None
+    # 其它情况（"none"/未知/没给）：不碰 third_eye，**跟随基底的源码行为**
+    # （卵石没有第三只眼；仰望皓月 DM 有，见 og.cs:2238-2254）。
+    # 2026-10-31 用户拍板删掉编辑器里"原版圆点"那个选项：它的作用已经被自定义画板替代。
 
     scale = override.get("headpiece_scale")
     if isinstance(scale, (int, float)) and not isinstance(scale, bool):

@@ -26,7 +26,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from iterator_pet.llm import cards as llm_cards  # noqa: E402
 from iterator_pet.llm import worldbook as wb  # noqa: E402
-from iterator_pet.platform.puppet_tab import PuppetTab  # noqa: E402
+from iterator_pet.platform.puppet_tab import BOARDS, PuppetTab  # noqa: E402
 from iterator_pet.rendering.pixel_art import PixelArt  # noqa: E402
 from iterator_pet.simulation import appearance as ap  # noqa: E402
 
@@ -247,9 +247,18 @@ def test_build_appearance_turns_the_pixel_headpiece_on_and_the_third_eye_off():
     assert appearance.third_eye is False, "画了自己的头饰就别再叠一个圆点"
     assert appearance.headpiece_scale == 2.0, "缩放要夹在 0.2–2.0"
 
-    dot = ap.build_appearance("x", "pebbles", {"headpiece_mode": "builtin_dot"})
-    assert dot.third_eye is True and dot.headpiece is None
-    assert dot.third_eye_colour == ap.default_third_eye_colour(ap.PEBBLES.skin)
+
+def test_headpiece_mode_none_follows_the_base_template():
+    """「无」= **不覆盖**：卵石本来没有第三只眼，仰望皓月 DM 有（og.cs:2238-2254）。
+
+    编辑器里那个"原版圆点"选项 2026-10-31 删掉了（作用被自定义画板替代），
+    但源码给 DM 画第三只眼这件事没删——它属于角色的原版外观，不是可选装饰。
+    """
+    pebbles = ap.build_appearance("x", "pebbles", {"headpiece_mode": "none"})
+    assert pebbles.third_eye is False and pebbles.headpiece is None
+    moon = ap.build_appearance("x", "past_moon", {"headpiece_mode": "none"})
+    assert moon.third_eye is True and moon.headpiece is None
+    assert "builtin_dot" not in ap.HEADPIECE_MODES
 
 
 def test_builtin_spark_colour_equals_what_the_renderer_drew_before_it_was_wired():
@@ -335,17 +344,21 @@ def test_untouched_puppet_tab_does_not_write_an_appearance_block(tmp_path):
 
 def test_puppet_tab_translates_a_stored_draft_back_into_widgets(tmp_path):
     (tmp_path / "characters").mkdir(parents=True)
+    art = PixelArt.blank()
+    art.set(11, 3, "#ffcc00")
     llm_cards.save_appearance("pebbles", {
         "base_template": "past_moon",
         "skin": [10, 20, 30],
-        "headpiece_mode": "builtin_dot",
+        "headpiece_mode": "pixel",
+        "headpiece_pixels": art.to_dict(),
     }, folder=tmp_path)
 
     tab = PuppetTab(tmp_path)
     tab.load("pebbles")
     assert tab.base_template() == "past_moon"
     assert tab.buttons["skin"].colour() == "#0a141e"
-    assert tab.headpiece_mode() == "builtin_dot"
+    assert tab.headpiece_mode() == "pixel"
+    assert tab.canvases["headpiece"].art.get(11, 3) == "#ffcc00"
     draft = tab.collect()
     assert draft["skin"] == [10, 20, 30]
     assert draft["base_template"] == "past_moon"
@@ -430,13 +443,44 @@ def test_the_gown_board_is_gone():
     assert not hasattr(ap.PEBBLES, "gown_art"), "渲染层的纹理分支也一起删干净"
 
 
+def test_each_canvas_matches_its_board_size(tmp_path):
+    """控件尺寸必须由画布数据尺寸推出来。
+
+    2026-10-31 用户报「天线轮廓只露出最左边一部分」：构造时给的是 24×20 的空白画布，
+    却把控件 setFixedSize 成 8×24 的尺寸 —— 控件只有 88 px 宽，paintEvent 却按
+    24 格 × 11 px = 264 px 画，右边三分之二被裁掉。这条断言就是那个 bug 的网。
+    """
+    (tmp_path / "characters").mkdir(parents=True)
+    tab = PuppetTab(tmp_path)
+    for key, _title, width, height, cell, _ref in BOARDS:
+        canvas = tab.canvases[key]
+        assert (canvas.art.w, canvas.art.h) == (width, height), f"{key} 的画布数据尺寸不对"
+        assert (canvas.width(), canvas.height()) == (width * cell, height * cell), \
+            f"{key} 的控件尺寸和画布尺寸对不上"
+
+
+def test_a_stored_art_of_the_wrong_size_is_fitted_to_the_board(tmp_path):
+    (tmp_path / "characters").mkdir(parents=True)
+    stale = PixelArt.blank(24, 20)          # 旧版本/手改留下的尺寸
+    stale.set(1, 1, "#ff0000")
+    llm_cards.save_appearance("pebbles", {
+        "antenna_pixels": stale.to_dict(),
+        "headpiece_pixels": stale.to_dict(),
+    }, folder=tmp_path)
+
+    tab = PuppetTab(tmp_path)
+    tab.load("pebbles")
+    assert (tab.canvases["antenna"].art.w, tab.canvases["antenna"].art.h) == (8, 24)
+    assert tab.canvases["antenna"].art.get(1, 1) == "#ff0000", "左上角对齐，内容别丢"
+    assert (tab.canvases["headpiece"].art.w, tab.canvases["headpiece"].art.h) == (24, 20)
+
+
 def test_both_boards_carry_a_reference_outline():
     """参考线曾经整个消失过：`_paint_reference` 判的是 "head"，而构造时传的是 "headpiece"。
 
     这里钉的是**每个画板都有非空的参考线类型**，而且两张图确实画出了东西。
     """
     from PySide6.QtGui import QImage, QPainter, QColor
-    from iterator_pet.platform.puppet_tab import BOARDS
 
     kinds = {board[0]: board[5] for board in BOARDS}
     assert kinds == {"headpiece": "head", "antenna": "antenna"}

@@ -74,6 +74,27 @@ BOARDS = (
     ("antenna", "天线 8×24（左右镜像）", 8, 24, 11, "antenna"),
 )
 
+#: 每个画板该有多大。**控件尺寸、画布数据尺寸、参考线都从这一个表来**——
+#: 2026-10-31 用户报"天线轮廓只露出最左边一部分"，根因就是构造时给了个 24×20 的空白画布、
+#: 却把控件设成 8×24 的尺寸：控件只有 88 px 宽，而 paintEvent 按 24 格 × 11 px = 264 px 画，
+#: 右边三分之二直接被裁掉。尺寸必须只有一个来源。
+BOARD_SIZES = {board[0]: (board[2], board[3]) for board in BOARDS}
+
+
+def fit_art(key: str, art: PixelArt | None) -> PixelArt:
+    """把任意尺寸的像素画塞进这个画板：尺寸不对就**左上对齐**裁剪/补透明。
+
+    存档里可能留着旧版本的尺寸（或玩家手改过 w/h），不能让它们把画板撑变形。
+    """
+    width, height = BOARD_SIZES.get(key, (DEFAULT_W, DEFAULT_H))
+    out = PixelArt.blank(width, height)
+    if art is None:
+        return out
+    for y in range(min(height, art.h)):
+        for x in range(min(width, art.w)):
+            out.pixels[y][x] = art.pixels[y][x]
+    return out
+
 PREVIEW_W, PREVIEW_H = 250, 300
 PREVIEW_SCALE = 6.0
 
@@ -329,7 +350,11 @@ class PuppetPreview(QWidget):
         for _ in range(140):
             sim.step(step)
         self._sim = sim
-        self._snapshot = sim.interpolate(1.0)
+        snapshot = sim.interpolate(1.0)
+        # 正面正脸（用户 2026-10-31）：look 归零 = 正对镜头。
+        # `face_look(0,0)` 得 (0,0) → 眼距对称（`lateral = ±2.5`）、两只眼与第三只眼都落在
+        # 中轴上，正是"证件照"要的朝向；不归零的话预览会跟着当时的鼠标视线歪。
+        self._snapshot = dataclasses.replace(snapshot, look_dir=(0.0, 0.0))
         self._camera = None
         self.set_appearance(appearance)
 
@@ -485,8 +510,8 @@ class PuppetTab(QWidget):
 
         self.stack = QStackedWidget()
         for key, _title, width, height, cell, reference in BOARDS:
-            canvas = PixelCanvas(None, cell=cell, reference=reference)
-            canvas.setFixedSize(width * cell, height * cell)
+            # 一开始就要给**对尺寸**的空白画布：控件尺寸由 art 尺寸推出来（见 BOARD_SIZES 注释）
+            canvas = PixelCanvas(PixelArt.blank(width, height), cell=cell, reference=reference)
             canvas.changed.connect(self._on_draw)
             canvas.picked.connect(self._on_picked)
             self.canvases[key] = canvas
@@ -571,14 +596,15 @@ class PuppetTab(QWidget):
             }
             for field, value in colours.items():
                 self.buttons[field].set_colour(_hex(value))
-            mode = str(draft.get("headpiece_mode")
-                       or ("builtin_dot" if template.third_eye else "none"))
+            mode = str(draft.get("headpiece_mode") or "none")
             if mode not in self.mode_buttons:
                 mode = "none"
             self.mode_buttons[mode].setChecked(True)
 
-            self.canvases["headpiece"].set_art(PixelArt.from_dict(draft.get("headpiece_pixels")))
-            self.canvases["antenna"].set_art(PixelArt.from_dict(draft.get("antenna_pixels")))
+            self.canvases["headpiece"].set_art(
+                fit_art("headpiece", PixelArt.from_dict(draft.get("headpiece_pixels"))))
+            self.canvases["antenna"].set_art(
+                fit_art("antenna", PixelArt.from_dict(draft.get("antenna_pixels"))))
             self.antenna_enabled.setChecked(bool(draft.get("antenna_pixels")))
             scale = draft.get("headpiece_scale")
             self._headpiece_scale = float(scale) if isinstance(scale, (int, float)) else 0.5
@@ -648,7 +674,7 @@ class PuppetTab(QWidget):
             "pod_colour": list(template.pod_colour),
             "pod_rim_colour": list(template.pod_rim_colour),
             "antenna_colour": list(template.antenna_colour),
-            "headpiece_mode": "builtin_dot" if template.third_eye else "none",
+            "headpiece_mode": "none",
         }
 
     def save(self) -> str:
