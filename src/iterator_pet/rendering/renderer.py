@@ -31,7 +31,7 @@ from PySide6.QtGui import (
 )
 
 from ..simulation import constants as C
-from ..simulation.appearance import antenna_pod_center_row
+from ..simulation.appearance import antenna_anchor
 from ..simulation.state import RenderState
 from .sprites import tinted
 
@@ -953,6 +953,9 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     # PhoneSprite(side, 0/1): Circle20 at +-clamp(Lerp(7,5,|look.x|)*sign, -11, 11)
     pod_w = C._lerp(3.5, 5.0, abs(look[0]))
     ap = state.appearance
+    art = ap.antenna_art
+    custom = art is not None and not art.is_empty()
+    pods: list[tuple[float, float, float, float]] = []      # (sign, cx, cy, aim)
     for sign in (-1.0, 1.0):
         offset = max(-11.0, min(11.0, C._lerp(7.0, 5.0, abs(look[0])) * sign))
         cx = state.head[0] + perp[0] * offset
@@ -963,34 +966,11 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
                cy - axis[1] * 40.0 - state.look_dir[1] * 10.0)
         aim = atan2(state.body0[1] - tip[1], state.body0[0] - tip[0]) * 180.0 / pi + 90.0
 
-        # 玩家画的侧边部件：**整条**（耳麦 + 内圈 + 触角），一张图左右镜像。
-        # **逐像素摆位置，不做整图缩放/翻转**：这块已经被"上下颠倒"坑了三次
-        # （2026-10-31 用户报了两次），宁可用 348 次 fillRect 换掉一整类朝向 bug。
-        # 画板约定：**底部那行是耳麦圆心、顶部是触角尖**（与屏幕朝向一致）。
-        art = ap.antenna_art
-        if art is not None and not art.is_empty():
-            cell = float(ap.antenna_scale or 0.5)
-            pod_row = antenna_pod_center_row(art.h)     # 圆心在第几行（从顶部数）
-            half = art.w * 0.5
-            painter.save()
-            painter.translate(QPointF(cx, cy))
-            painter.rotate(aim)
-            if sign < 0:
-                painter.scale(-1.0, 1.0)                # 左右镜像**只管自定义图**
-            painter.setPen(Qt.PenStyle.NoPen)
-            for row in range(art.h):
-                # 行号越大越靠下 = 越靠内；局部 +y 朝外，所以取负号
-                oy = (pod_row - row) * cell
-                line = art.pixels[row]
-                for col in range(art.w):
-                    colour = line[col]
-                    if colour is None:
-                        continue
-                    painter.fillRect(
-                        QRectF((col - half) * cell, oy, cell, cell), QColor(colour)
-                    )
-            painter.restore()
-            continue                       # 画了自己的就不再叠源码那两个圆和杆
+        if custom:
+            # 玩家画的侧边部件稍后在**头之后**画（见 draw_antenna_art 的说明），
+            # 这里只记下每侧的位置与朝向。画了自己的就不再叠源码那两个圆和杆。
+            pods.append((sign, cx, cy, aim))
+            continue
 
         # 源码分支：两个圆（外圈 + 内圈）+ 一根触角
         for part, scale in ((0, 1.0), (1, 0.8)):
@@ -1030,6 +1010,13 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     # （见 draw_headpiece 的说明）。
     draw_headpiece(painter, state)
 
+    # 玩家画的天线：**在头与下巴之后、眼睛之前**。照源码顺序（头顶部件在头之前）
+    # 画的话，画板 2026-10-31 扩进来的"半个脑袋"区域里画什么都会被头整个盖住 ——
+    # 画板上有、屏幕上没有，是最难解释的一类谎。眼睛仍在后面画，所以她照样盯着你。
+    if custom:
+        for sign, cx, cy, aim in pods:
+            draw_antenna_art(painter, ap, art, sign, cx, cy, aim)
+
     # EyeSprite: 1x1 `pixel` at head + perp*clamp(look.x*3 + 2.5*sign, -5, 5)
     # + axis*(1 - look.y*3), rotated onto the body axis. og.cs:2168 sets
     # scaleX = 1 + InverseLerp(...) + (1 - eyesOpen), og.cs:2169 sets
@@ -1051,6 +1038,42 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
 
     # og.cs:2238 第三只眼在头和两只眼之后画（只有 inherit/源码那支才有）
     draw_third_eye(painter, state)
+
+
+def draw_antenna_art(painter: QPainter, appearance, art, sign: float,
+                     cx: float, cy: float, aim: float) -> None:
+    """把玩家画的天线图摆到某一侧（**整条**：耳麦 + 内圈 + 触角，一张图左右镜像）。
+
+    **逐像素摆位置，不做整图缩放/翻转**：这块被"上下颠倒"坑了三次
+    （2026-10-31 用户报了两次），宁可用几百次 ``fillRect`` 换掉一整类朝向 bug。
+    画板约定：**顶部是触角尖、底部是内侧**（与屏幕朝向一致）。
+
+    三个必须记牢的点：
+
+    * 圆心用 ``antenna_anchor``：新画板偏心（6, 24），第一版的 12×29 走居中约定，
+      两种都要落在**原来的**屏幕像素上；
+    * ``oy = (anchor_row - row) * cell``：行号越大越靠内，而局部 +y 朝外，所以取负号；
+    * ``sign < 0`` 时 ``scale(-1, 1)``：只在自定义图上镜像（源码那两个圆不镜像）。
+    """
+    cell = float(appearance.antenna_scale or 0.5)
+    anchor_col, anchor_row = antenna_anchor(art.w, art.h, appearance.antenna_anchor)
+    painter.save()
+    painter.translate(QPointF(cx, cy))
+    painter.rotate(aim)
+    if sign < 0:
+        painter.scale(-1.0, 1.0)                # 左右镜像**只管自定义图**
+    painter.setPen(Qt.PenStyle.NoPen)
+    for row in range(art.h):
+        oy = (anchor_row - row) * cell
+        line = art.pixels[row]
+        for col in range(art.w):
+            colour = line[col]
+            if colour is None:
+                continue
+            painter.fillRect(
+                QRectF((col - anchor_col) * cell, oy, cell, cell), QColor(colour)
+            )
+    painter.restore()
 
 
 def _art_pixmap(art):

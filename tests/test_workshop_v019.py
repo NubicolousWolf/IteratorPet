@@ -468,19 +468,27 @@ def test_each_canvas_matches_its_board_size(tmp_path):
 
 
 def test_a_stored_art_of_the_wrong_size_is_fitted_to_the_board(tmp_path):
+    """存档里留着旧尺寸（或玩家手改过 w/h）时不许把画板撑变形。
+
+    两种画板的对齐规则不同：头顶画板对称 → 左上对齐；天线画板偏心 →
+    **按耳麦圆心对齐**（见 `test_a_legacy_antenna_art_lands_on_the_same_pixels_after_the_board_grew`）。
+    """
     (tmp_path / "characters").mkdir(parents=True)
-    stale = PixelArt.blank(24, 20)          # 旧版本/手改留下的尺寸
-    stale.set(1, 1, "#ff0000")
+    stale_head = PixelArt.blank(24, 20)          # 顶层尺寸不对，但内容能左上对齐
+    stale_head.set(1, 1, "#ff0000")
+    legacy_antenna = PixelArt.blank(12, 29)      # 第一版的天线画板
+    legacy_antenna.set(6, 22, "#00ff00")
     llm_cards.save_appearance("pebbles", {
-        "antenna_pixels": stale.to_dict(),
-        "headpiece_pixels": stale.to_dict(),
+        "antenna_pixels": legacy_antenna.to_dict(),
+        "headpiece_pixels": stale_head.to_dict(),
     }, folder=tmp_path)
 
     tab = PuppetTab(tmp_path)
     tab.load("pebbles")
     assert (tab.canvases["antenna"].art.w, tab.canvases["antenna"].art.h) == BOARD_SIZES["antenna"]
-    assert tab.canvases["antenna"].art.get(1, 1) == "#ff0000", "左上角对齐，内容别丢"
+    assert tab.canvases["antenna"].art.get(6, 24) == "#00ff00", "按圆心对齐，内容别丢"
     assert (tab.canvases["headpiece"].art.w, tab.canvases["headpiece"].art.h) == (24, 20)
+    assert tab.canvases["headpiece"].art.get(1, 1) == "#ff0000"
 
 
 def test_both_boards_carry_a_reference_outline():
@@ -558,27 +566,92 @@ def test_the_renderer_draws_both_custom_boards_without_blowing_up():
     assert not image.isNull()
 
 
-def test_the_antenna_board_covers_the_whole_side_assembly():
-    """画板必须**包含耳麦与内圈**，不能只按那根触角定尺寸。
+def test_the_antenna_board_covers_from_the_tip_to_the_chin_and_inward():
+    """画板要装得下：触角尖（上）、耳麦外缘（左）、**下巴（下）、脑袋中线（右）**。
 
-    用户 2026-10-31 一眼看出来：「8×24 更像是触角长度，没包含内圈和耳麦」。
-    按源码字面量：耳麦直径最大 5.0 px、触角 3.0 × 11.2 px，圆心在第
-    `ANTENNA_POD_ROWS` 格 —— 画板要装得下"圆心以上半个耳麦 + 圆心以下整根触角"。
+    2026-10-31 用户第三条：原来的 12×29 只够画那根杆，想画贴着下巴/脸颊的须子根本没地方。
+    现在把"半个脑袋"也划进可画范围，圆心因此**偏左上**（6, 24）而不是画布中心。
     """
+    from iterator_pet.platform.puppet_tab import BOARD_ANCHORS
+
     cell = 0.5
     width, height = BOARD_SIZES["antenna"]
     assert (width, height) == ap.antenna_board_size(cell)
+    col, row = BOARD_ANCHORS["antenna"]
+    assert (col, row) == ap.antenna_board_anchor(cell), "锚点必须和尺寸同源"
 
-    radius_rows = ap.ANTENNA_POD_DIAMETER_PX * 0.5 / cell      # 5.0 格
-    stalk_rows = ap.ANTENNA_STALK_LENGTH_PX / cell             # 22.4 格
-    center = ap.antenna_pod_center_row(height)                 # 从顶部数的圆心行
-    assert center + radius_rows <= height - 0.5, "耳麦下沿不许出画布"
-    assert center - stalk_rows >= 0, "触角尖不许出画布（尖在上、耳麦在底）"
-    assert ap.ANTENNA_POD_DIAMETER_PX / cell <= width - 1, "耳麦直径不许横向出画布"
+    assert col >= ap.ANTENNA_POD_DIAMETER_PX * 0.5 / cell, "耳麦外半边不许出画布"
+    assert row >= ap.ANTENNA_STALK_LENGTH_PX / cell, "触角尖不许出画布（尖在顶）"
+    assert width - col >= ap.ANTENNA_HEAD_MIDLINE_PX / cell, "右侧必须够到脑袋中线"
+    assert height - row >= ap.ANTENNA_CHIN_BOTTOM_PX / cell, "下侧必须够到下巴"
+
+
+def test_a_legacy_antenna_art_lands_on_the_same_pixels_after_the_board_grew():
+    """旧版 12×29 的图**不许**因为画板变大就整体漂一截：按耳麦圆心对齐迁移。
+
+    第一版圆心在第 ``h-1-5.5 = 22.5`` 行、横向居中；新画板圆心在 (6, 24)。
+    左上对齐会让整张图往下挪 1.5 格（= 0.75 仿真 px），玩家画好的天线会在桌面上跳一下。
+    """
+    from iterator_pet.platform.puppet_tab import BOARD_ANCHORS, fit_art
+
+    legacy = PixelArt.blank(12, 29)
+    legacy.set(6, 22, "#ff0000")          # 圆心所在那两行之一
+    legacy.set(6, 0, "#00ff00")           # 触角尖
+
+    fitted = fit_art("antenna", legacy)
+    col, row = BOARD_ANCHORS["antenna"]
+
+    assert (fitted.w, fitted.h) == BOARD_SIZES["antenna"]
+    assert fitted.get(int(col), int(row)) == "#ff0000", "圆心附近的内容要落在新圆心上"
+    assert fitted.get(int(col), int(row) - 22) == "#00ff00", "触角尖也要跟着搬"
+
+
+def test_the_grid_and_reference_lines_never_paint_over_the_art():
+    """用户 2026-10-31 第四条：画好的天线上浮着一层网格线。
+
+    绘制顺序必须是"底色 → 棋盘 → 网格 → 参考线 → 像素"，所以任何一个落笔的格子
+    **整格**都得正好是那个颜色。把网格/参考线挪回像素之前，这条会红。
+    """
+    from iterator_pet.platform.puppet_tab import BOARD_ANCHORS, PixelCanvas
+
+    canvas = PixelCanvas(
+        PixelArt.blank(*BOARD_SIZES["antenna"]), cell=9, reference="antenna",
+        anchor=BOARD_ANCHORS["antenna"],
+    )
+    marks = {(6, 24): "#ff00ff", (10, 20): "#00ff00", (2, 34): "#00ffff"}
+    for (x, y), colour in marks.items():
+        canvas.art.set(x, y, colour)
+
+    image = canvas.grab().toImage()
+    blurry = []
+    for (x, y), colour in marks.items():
+        for dy in range(canvas.cell):
+            for dx in range(canvas.cell):
+                got = image.pixelColor(x * canvas.cell + dx, y * canvas.cell + dy).name()
+                if got != colour:
+                    blurry.append(f"({x},{y})+({dx},{dy})={got}")
+    assert not blurry, "落笔的格子被辅助线描脏了：" + ", ".join(blurry[:5])
+
+
+def test_symmetric_painting_mirrors_around_the_pod_not_the_canvas():
+    """「左右对称」的镜像轴是**耳麦圆心**。用画布中心会把对称轴右移 4.5 格，
+    在偏心的新画板上直接画出两只不对称的须子。"""
+    from iterator_pet.platform.puppet_tab import BOARD_ANCHORS, PixelCanvas
+
+    canvas = PixelCanvas(
+        PixelArt.blank(*BOARD_SIZES["antenna"]), cell=9, reference="antenna",
+        anchor=BOARD_ANCHORS["antenna"],
+    )
+    canvas.symmetric = True
+    canvas._paint(8, 30)
+
+    assert canvas.art.get(8, 30) == "#ff66cb"
+    assert canvas.art.get(3, 30) == "#ff66cb", "关于圆心（第 6 列）镜像：8 → 3"
+    assert canvas.art.get(21 - 8, 30) is None, "不是关于画布中心镜像"
 
 
 def test_the_antenna_points_outward_not_inward():
-    """画板上**顶部是触角尖、底部是耳麦**，画到屏幕上必须是"尖朝外"。
+    """画板上**顶部是触角尖、底部是内侧（下巴那一带）**，画到屏幕上必须是"尖朝外"。
 
     这块被"上下颠倒"坑了三次（2026-10-31 用户报了两次）。这里用像素距离直接量：
     第 0 行涂红、最后一行涂蓝，红点平均位置必须比蓝点离头更远。

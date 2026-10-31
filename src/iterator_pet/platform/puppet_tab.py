@@ -66,14 +66,20 @@ ANTENNA_FIELDS = (
     ("antenna_colour", "触角", "从耳麦朝外的一根（LizardScaleA1）"),
 )
 
+#: 天线画板的格子尺寸（1 格 = 0.5 仿真 px，与 `Appearance.antenna_scale` 的默认一致）。
+#: 尺寸与耳麦锚点都从 `simulation/appearance.py` 算，本文件不再另写一份数字。
+ANTENNA_CELL = 9
+_ANTENNA_W, _ANTENNA_H = ap.antenna_board_size(0.5)
+
 #: 两个画板：(键, 标题, 宽, 高, 每格像素, 参考线类型)
 #:
 #: 衣袍画板（11×11 采样到袍身网格）做过又删了（用户 2026-10-31：效果不好）。
 #: 原因是袍身是一个**会变形的布网格**，玩家画的方块贴上去会跟着扭曲、还被两只袖子
 #: 盖掉大半，画什么也看不出原样。留一块画不动的画板比没有更糟。
 BOARDS = (
-    ("headpiece", "头顶部件 24×20", DEFAULT_W, DEFAULT_H, 11, "head"),
-    ("antenna", "天线 12×29（含耳麦，左右镜像）", 12, 29, 9, "antenna"),
+    ("headpiece", f"头顶部件 {DEFAULT_W}×{DEFAULT_H}", DEFAULT_W, DEFAULT_H, 11, "head"),
+    ("antenna", f"天线 {_ANTENNA_W}×{_ANTENNA_H}（含耳麦与半个脑袋，左右镜像）",
+     _ANTENNA_W, _ANTENNA_H, ANTENNA_CELL, "antenna"),
 )
 
 #: 每个画板该有多大。**控件尺寸、画布数据尺寸、参考线都从这一个表来**——
@@ -82,19 +88,45 @@ BOARDS = (
 #: 右边三分之二直接被裁掉。尺寸必须只有一个来源。
 BOARD_SIZES = {board[0]: (board[2], board[3]) for board in BOARDS}
 
+#: 画板的"原点"：耳麦圆心在哪一格。头顶画板是对称的（原点 = 中心），
+#: 天线画板偏心（左边给触角、右下给半个脑袋），所以原点必须显式给出。
+BOARD_ANCHORS = {"antenna": ap.antenna_board_anchor(0.5)}
 
-def fit_art(key: str, art: PixelArt | None) -> PixelArt:
-    """把任意尺寸的像素画塞进这个画板：尺寸不对就**左上对齐**裁剪/补透明。
 
-    存档里可能留着旧版本的尺寸（或玩家手改过 w/h），不能让它们把画板撑变形。
+def fit_art(key: str, art: PixelArt | None, anchor=None) -> PixelArt:
+    """把任意尺寸的像素画塞进这个画板。
+
+    * 尺寸一样 → 原样；
+    * 尺寸不同（旧版本的 12×29 天线、或玩家手改过 w/h）→ **按耳麦圆心对齐**后裁剪/补透明。
+
+    为什么不是左上对齐：第一版天线画板是 12×29、耳麦圆心在第 22.5 行；新画板 22×36、
+    圆心在第 24 行。左上对齐等于整体往下挪 1.5 格（0.75 仿真 px），玩家画好的天线会在
+    桌面上突然偏移一截。**圆心对齐**则两种情况都落在同一批屏幕像素上。
     """
     width, height = BOARD_SIZES.get(key, (DEFAULT_W, DEFAULT_H))
     out = PixelArt.blank(width, height)
     if art is None:
         return out
-    for y in range(min(height, art.h)):
-        for x in range(min(width, art.w)):
-            out.pixels[y][x] = art.pixels[y][x]
+    target = BOARD_ANCHORS.get(key)
+    if target is None or (art.w, art.h) == (width, height):
+        # 尺寸本来就对：**一个格子都不动**。玩家自己存的锚点要继续说了算，
+        # 否则"手改过锚点"的图会被我们强行掰回画板锚点。
+        for y in range(min(height, art.h)):
+            for x in range(min(width, art.w)):
+                out.pixels[y][x] = art.pixels[y][x]
+        return out
+    old_col, old_row = ap.antenna_anchor(art.w, art.h, anchor)
+    # 只搬整数格：圆心本身可以落在半格上，但那半个格子的偏差由 anchor 吸收
+    dx = int(round(target[0] - old_col))
+    dy = int(round(target[1] - old_row))
+    for y in range(art.h):
+        ty = y + dy
+        if not (0 <= ty < height):
+            continue
+        for x in range(art.w):
+            tx = x + dx
+            if 0 <= tx < width:
+                out.pixels[ty][tx] = art.pixels[y][x]
     return out
 
 PREVIEW_W, PREVIEW_H = 250, 300
@@ -154,17 +186,26 @@ class ColourButton(QPushButton):
 
 
 class PixelCanvas(QWidget):
-    """像素画板：左键画、右键擦、Alt/吸管模式取色、对称开关、撤销栈。"""
+    """像素画板：左键画、右键擦、Alt/吸管模式取色、对称开关、撤销栈。
+
+    **绘制顺序是"底色 → 棋盘 → 网格 → 参考线 → 像素"**（用户 2026-10-31 第四条）：
+    网格和参考线以前画在像素**之后**，于是玩家画好的天线上会浮着一层网格线，
+    导出的像素图反而是干净的 —— 画板和成品不一致是最难解释的一类 bug。
+    现在辅助线只出现在**空着的格子**上，任何一笔落下去都把它盖住。
+    """
 
     changed = Signal()
     picked = Signal(str)
 
     def __init__(self, art: PixelArt | None = None, cell: int = 11,
-                 reference: str = "head", parent=None):
+                 reference: str = "head", anchor=None, parent=None):
         super().__init__(parent)
         self.art = art.copy() if art is not None else PixelArt.blank()
         self.cell = max(4, int(cell))
         self.reference = reference          # "head" / "antenna"
+        self.anchor = anchor                # 耳麦圆心（列, 行），只有天线画板有
+        self.px_cells = 2.0                 # 1 仿真 px = 几格（0.5 px/格 → 2；由 PuppetTab 按 scale 校正）
+        self.ref_eye = 2.0                  # 眼睛高度（px）：卵石 2、皓月 3
         self.colour = "#ff66cb"
         self.brush = 1
         self.erasing = False
@@ -185,6 +226,16 @@ class PixelCanvas(QWidget):
         if (self.art.w, self.art.h) != (had.w, had.h):
             self.setFixedSize(self.art.w * self.cell, self.art.h * self.cell)
         self.update()
+
+    # -- 原点 ---------------------------------------------------------------
+    @property
+    def anchor_col(self) -> float:
+        """原点在第几列。对称画板就是中心（``w/2``），天线画板是耳麦圆心（偏左）。"""
+        return ap.antenna_anchor(self.art.w, self.art.h, self.anchor)[0]
+
+    @property
+    def anchor_row(self) -> float:
+        return ap.antenna_anchor(self.art.w, self.art.h, self.anchor)[1]
 
     def push_undo(self) -> None:
         self._undo.append([row[:] for row in self.art.pixels])
@@ -213,7 +264,9 @@ class PixelCanvas(QWidget):
     def _paint(self, x: int, y: int) -> None:
         targets = [(x, y)]
         if self.symmetric:
-            mirror = self.art.w - 1 - x
+            # 镜像轴 = 画板原点（耳麦圆心），不是画布中心：天线画板是偏心的，
+            # 用 `w-1-x` 会把对称轴挪到右边 4.5 格，画出来的须子一左一右差半个头。
+            mirror = int(round(2.0 * self.anchor_col - 1 - x))
             if mirror != x:
                 targets.append((mirror, y))
         colour = None if self.erasing else self.colour
@@ -286,14 +339,7 @@ class PixelCanvas(QWidget):
                     painter.fillRect(
                         x * self.cell, y * self.cell, self.cell, self.cell, light
                     )
-        for y in range(self.art.h):
-            for x in range(self.art.w):
-                colour = self.art.pixels[y][x]
-                if colour is None:
-                    continue
-                painter.fillRect(
-                    x * self.cell, y * self.cell, self.cell, self.cell, QColor(colour)
-                )
+        # 网格与参考线画在像素**下面**（用户 2026-10-31 第四条：画好的天线不许带网格线）
         grid_ink = QColor(ink)
         grid_ink.setAlpha(46)
         painter.setPen(QPen(grid_ink, 1))
@@ -302,12 +348,46 @@ class PixelCanvas(QWidget):
         for y in range(self.art.h + 1):
             painter.drawLine(0, y * self.cell, self.width(), y * self.cell)
         self._paint_reference(painter)
+        for y in range(self.art.h):
+            for x in range(self.art.w):
+                colour = self.art.pixels[y][x]
+                if colour is None:
+                    continue
+                painter.fillRect(
+                    x * self.cell, y * self.cell, self.cell, self.cell, QColor(colour)
+                )
         painter.end()
+
+    def _paint_eyes(self, painter: QPainter, cx: float, cy: float) -> None:
+        """两只眼睛的参考框（中心在 ``head ± 2.5 px``、``+1 px`` 处，尺寸 1 × ``eye_scale_y`` px）。
+
+        数值来自 ``og.cs:2168-2169`` 与 ``renderer.eye_offset``；``eye_scale_y`` 由基底决定
+        （卵石 2 px、皓月 3 px），所以高度要跟着基底走。
+
+        **第一版这里画成 1 格 × 2 格（= 0.5 × 1 仿真 px），只有真尺寸的一半**——
+        参考线撒谎比没有参考线更糟，这次一起改对。
+        """
+        cell = self.cell
+        per_px = self.px_cells
+        w_cells = 1.0 * per_px
+        h_cells = float(self.ref_eye) * per_px
+        for sign in (-1, 1):
+            ex = cx + sign * 2.5 * per_px
+            ey = cy + 1.0 * per_px
+            painter.drawRect(
+                QRectF(
+                    (ex - w_cells * 0.5) * cell,
+                    (ey - h_cells * 0.5) * cell,
+                    w_cells * cell,
+                    h_cells * cell,
+                )
+            )
 
     def _paint_reference(self, painter: QPainter) -> None:
         """参考线：**照源码算的位置**，不是随手画的示意。
 
         颜色跟着画板底色走（`ink` = 深底用亮线、浅底用暗线），否则换个底色参考线就消失。
+        这些线画在像素**之前**（见 ``paintEvent``）：辅助线只出现在空着的格子上。
         """
         ink = self._palette_of_board()[2]
 
@@ -316,44 +396,64 @@ class PixelCanvas(QWidget):
             colour.setAlpha(alpha)
             return QPen(colour, 1, style)
 
+        cell = self.cell
+        per_px = self.px_cells          # 1 仿真 px = 几格
+        head_half_w = 20.0 * R.HEAD_RAD / 9.0 * 0.5      # 5.556 px
+        head_half_h = 20.0 * R.HEAD_RAD / 11.0 * 0.5     # 4.545 px
+        chin_r = 20.0 * R.HEAD_RAD / 15.0 * 0.5          # 3.333 px
+
         if self.reference == "head":
             painter.setPen(ref_pen(170))
             cx = self.art.w * 0.5
             cy = self.art.h * 0.5
-            head_w = 20.0 * R.HEAD_RAD / 9.0 * 2.0        # 11.11 仿真 px -> 22.2 格
-            head_h = 20.0 * R.HEAD_RAD / 11.0 * 2.0
             painter.drawEllipse(
-                QPointF(cx * self.cell, cy * self.cell),
-                head_w * 0.5 * self.cell,
-                head_h * 0.5 * self.cell,
+                QPointF(cx * cell, cy * cell),
+                head_half_w * per_px * cell,
+                head_half_h * per_px * cell,
             )
             painter.setPen(ref_pen(210, Qt.PenStyle.SolidLine))
-            for sign in (-1, 1):
-                ex = cx + sign * 2.5 * 2.0               # perp 方向 ±2.5 仿真 px
-                ey = cy + 1.0 * 2.0                      # 体轴方向 1 仿真 px（朝下）
-                painter.drawRect(
-                    QRectF((ex - 0.5) * self.cell, (ey - 1.0) * self.cell,
-                           self.cell, self.cell * 2.0)
-                )
+            self._paint_eyes(painter, cx, cy)
         elif self.reference == "antenna":
-            # **整条侧边部件的外轮廓**：耳麦外圈（5.0 px ⌀）+ 内圈（×0.8）+ 触角
-            # （3.0 × 11.2 px）。1 仿真 px = 2 格，所以半径/宽度都 ×2。
-            # 朝向与屏幕一致：**触角尖在上、耳麦在底**（圆心行由 antenna_pod_center_row 给）。
-            cell = self.cell
-            cx = self.art.w * 0.5 * cell
-            cy = ap.antenna_pod_center_row(self.art.h) * cell
+            # 画板原点 = 耳麦圆心。**右边 = 朝脑袋（内）、下边 = 朝下巴（内）**，
+            # 与屏幕一致：触角尖在左上，半个脑袋在右下。
+            ax = self.anchor_col
+            ay = self.anchor_row
+            cx = ax * cell
+            cy = ay * cell
+            pod_r = ap.ANTENNA_POD_DIAMETER_PX * 0.5 * per_px * cell
             painter.setPen(ref_pen(180))
-            painter.drawEllipse(QPointF(cx, cy),
-                                ap.ANTENNA_POD_DIAMETER_PX * cell,
-                                ap.ANTENNA_POD_DIAMETER_PX * cell)
+            painter.drawEllipse(QPointF(cx, cy), pod_r, pod_r)
             painter.setPen(ref_pen(140, Qt.PenStyle.DotLine))
-            painter.drawEllipse(QPointF(cx, cy),
-                                ap.ANTENNA_POD_DIAMETER_PX * 0.8 * cell,
-                                ap.ANTENNA_POD_DIAMETER_PX * 0.8 * cell)
+            painter.drawEllipse(QPointF(cx, cy), pod_r * 0.8, pod_r * 0.8)
             painter.setPen(ref_pen(200))
-            stalk_w = ap.ANTENNA_STALK_WIDTH_PX * 2.0 * cell
-            stalk_h = ap.ANTENNA_STALK_LENGTH_PX * 2.0 * cell
+            stalk_w = ap.ANTENNA_STALK_WIDTH_PX * per_px * cell
+            stalk_h = ap.ANTENNA_STALK_LENGTH_PX * per_px * cell
             painter.drawRect(QRectF(cx - stalk_w * 0.5, cy - stalk_h, stalk_w, stalk_h))
+
+            # 半个脑袋：圆心在耳麦圆心**朝内** `ANTENNA_HEAD_MIDLINE_PX` 处、同一行。
+            head_x_cells = ax + ap.ANTENNA_HEAD_MIDLINE_PX * per_px
+            hx = head_x_cells * cell
+            painter.setPen(ref_pen(120))
+            painter.drawEllipse(
+                QPointF(hx, cy),
+                head_half_w * per_px * cell,
+                head_half_h * per_px * cell,
+            )
+            # 下巴（真正决定画板下缘的那个圆：它比脑袋下缘还低一格）。
+            # 圆心 = `ANTENNA_CHIN_BOTTOM_PX`（到下巴**底**）减去半径 —— 整条链只有一个来源。
+            painter.setPen(ref_pen(100))
+            chin_y_cells = ay + (ap.ANTENNA_CHIN_BOTTOM_PX - chin_r) * per_px
+            painter.drawEllipse(
+                QPointF(hx, chin_y_cells * cell), chin_r * per_px * cell, chin_r * per_px * cell
+            )
+            # 脑袋中线：竖线，从头顶到下巴底。画板右缘正好落在它上面（用户指定）
+            painter.setPen(ref_pen(150))
+            painter.drawLine(
+                QPointF(hx, cy - head_half_h * per_px * cell),
+                QPointF(hx, (chin_y_cells + chin_r * per_px) * cell),
+            )
+            painter.setPen(ref_pen(210, Qt.PenStyle.SolidLine))
+            self._paint_eyes(painter, head_x_cells, ay)
         else:
             painter.setPen(ref_pen(140))
             painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
@@ -441,6 +541,7 @@ class PuppetTab(QWidget):
         self._loading = False
         self._headpiece_scale = 0.5
         self._antenna_scale = 0.5
+        self._antenna_anchor = BOARD_ANCHORS["antenna"]
         self._recent: list[str] = []
         self._board_bg = getattr(config, "board_bg", "#6b6b70")
         self.buttons: dict[str, ColourButton] = {}
@@ -552,7 +653,8 @@ class PuppetTab(QWidget):
         self.stack = QStackedWidget()
         for key, _title, width, height, cell, reference in BOARDS:
             # 一开始就要给**对尺寸**的空白画布：控件尺寸由 art 尺寸推出来（见 BOARD_SIZES 注释）
-            canvas = PixelCanvas(PixelArt.blank(width, height), cell=cell, reference=reference)
+            canvas = PixelCanvas(PixelArt.blank(width, height), cell=cell, reference=reference,
+                                 anchor=BOARD_ANCHORS.get(key))
             canvas.changed.connect(self._on_draw)
             canvas.picked.connect(self._on_picked)
             self.canvases[key] = canvas
@@ -582,8 +684,8 @@ class PuppetTab(QWidget):
         )
         self.hint = QLabel(
             f"画板：{sizes}（每格像素固定，窗口再小也只会出滚动条，不会裁掉）。"
-            "左键画、右键擦、Alt 取色。"
-            "配色与画板会存进角色卡；应用到桌面人偶与新建角色在 v0.2.0。"
+            "天线画板已扩到半个脑袋：右边到脑袋中线、下边到下巴，脑袋/下巴/眼睛都是参考线。"
+            "左键画、右键擦、Alt 取色；辅助线只出现在空白的格子上。"
         )
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color:#888; font-size:11px;")
@@ -621,6 +723,22 @@ class PuppetTab(QWidget):
 
     def _on_board(self, *_args) -> None:
         self.stack.setCurrentIndex(self.board_box.currentIndex())
+
+    def _sync_canvas_units(self, template=None) -> None:
+        """告诉画板"1 仿真 px 等于几格"和"眼睛几 px 高"。
+
+        参考线要按这两个数换算：画板格子固定（每格 9 或 11 屏 px），而每格代表多少仿真
+        px 由 ``headpiece_scale`` / ``antenna_scale`` 决定；眼睛高度由基底决定
+        （卵石 2 px、皓月 3 px）。**写死在画板里就会在换基底/换 scale 后撒谎。**
+        """
+        template = template or ap.CHARACTERS.get(self.base_template()) or ap.PEBBLES
+        for key, scale in (("headpiece", self._headpiece_scale),
+                           ("antenna", self._antenna_scale)):
+            canvas = self.canvases.get(key)
+            if canvas is None:
+                continue
+            canvas.px_cells = 1.0 / max(0.05, float(scale))
+            canvas.ref_eye = float(template.eye_scale_y)
 
     # -- 载入 / 保存 ---------------------------------------------------------
     def load(self, key: str) -> None:
@@ -660,8 +778,27 @@ class PuppetTab(QWidget):
 
             self.canvases["headpiece"].set_art(
                 fit_art("headpiece", PixelArt.from_dict(draft.get("headpiece_pixels"))))
+            # 天线：旧图（12×29，没有锚点）按"耳麦圆心不动"迁到新画板上，
+            # 玩家已经画好的部分不许整体漂一截。迁移完图上就落在**新画板的锚点**上。
+            raw_anchor = draft.get("antenna_anchor")
+            stored_anchor = (
+                (float(raw_anchor[0]), float(raw_anchor[1]))
+                if isinstance(raw_anchor, (list, tuple)) and len(raw_anchor) == 2
+                else None
+            )
+            raw_art = PixelArt.from_dict(draft.get("antenna_pixels"))
+            migrated = raw_art is not None and (
+                (raw_art.w, raw_art.h) != BOARD_SIZES["antenna"]
+            )
+            self._antenna_anchor = (
+                BOARD_ANCHORS["antenna"]
+                if migrated
+                else (stored_anchor or BOARD_ANCHORS["antenna"])
+            )
+            # 参考线跟着图的实际锚点走（手改过锚点的卡也不会"线在 A、图在 B"）
+            self.canvases["antenna"].anchor = self._antenna_anchor
             self.canvases["antenna"].set_art(
-                fit_art("antenna", PixelArt.from_dict(draft.get("antenna_pixels"))))
+                fit_art("antenna", raw_art, stored_anchor))
             self.antenna_enabled.setChecked(bool(draft.get("antenna_pixels")))
             scale = draft.get("headpiece_scale")
             self._headpiece_scale = float(scale) if isinstance(scale, (int, float)) else 0.5
@@ -669,6 +806,7 @@ class PuppetTab(QWidget):
             self._antenna_scale = (
                 float(antenna_scale) if isinstance(antenna_scale, (int, float)) else 0.5
             )
+            self._sync_canvas_units(template)
             self._refresh_preview()
         finally:
             self._loading = False
@@ -714,6 +852,9 @@ class PuppetTab(QWidget):
                 pass                      # 颜色太多：save() 里会明确报错，不静默丢
             if scale is not None:
                 draft["headpiece_scale" if key == "headpiece" else "antenna_scale"] = scale
+            if key == "antenna":
+                # 锚点跟着图一起存：画板是偏心的，"圆心在画布中心"这条老约定已经不成立。
+                draft["antenna_anchor"] = list(self._antenna_anchor)
         return draft
 
     def _pristine_draft(self) -> dict:
@@ -843,6 +984,8 @@ class PuppetTab(QWidget):
                              ("pod_rim_colour", template.pod_rim_colour),
                              ("antenna_colour", template.antenna_colour)):
             self.buttons[field].set_colour(_hex(value))
+        # 换基底 → 眼睛高度变了（卵石 2 px / 皓月 3 px），画板参考线跟着改
+        self._sync_canvas_units(template)
 
     def _on_mode(self, *_args) -> None:
         if self._loading:

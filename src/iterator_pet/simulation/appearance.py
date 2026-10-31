@@ -69,6 +69,13 @@ class Appearance:
     # 玩家画的侧边部件（**左右镜像**同一张图）。None = 用源码那两个圆 + 一根触角。
     antenna_art: PixelArt | None = None
     antenna_scale: float = 0.5
+    #: 这张图里"耳麦圆心"落在**第几格**（col, row，都从画布左上角数）。
+    #:
+    #: ``None`` = 走第一版的隐含约定（横向居中、纵向 ``h-1-5.5``，见
+    #: :func:`antenna_anchor`）。2026-10-31 画板扩成"半个脑袋"之后它变成**偏心**的
+    #: （6, 24），"居中"这条假设不成立了，锚点必须跟着图一起存，
+    #: 否则玩家已经画好的天线会整体漂 2.5 px。
+    antenna_anchor: tuple[float, float] | None = None
 
 
 def _moon_gown(f: float) -> tuple[int, int, int]:
@@ -132,36 +139,89 @@ CHARACTERS = {"pebbles": PEBBLES, "past_moon": PAST_MOON}
 #: 仪式是否杀鼠标）来自基底 —— 见 docs/PLAN-custom-iterator.md §1。
 BASE_TEMPLATES = {"pebbles": "五块卵石", "past_moon": "仰望皓月"}
 
-#: 天线画板的几何（**整条侧边部件**：耳麦 + 内圈 + 触角，不只是那根杆）。
+#: 天线画板的几何（**整条侧边部件 + 半个脑袋**，不只是那根杆）。
 #:
 #: 数值都来自 `renderer.py::draw_puppet_head` 里的字面量：
 #: 耳麦直径 `Lerp(3.5, 5.0, |look.x|)` → 最大 5.0 px，内圈 ×0.8，触角 `3.0 × 11.2` px。
 #: 画板 1 格 = ``antenna_scale``（默认 0.5 仿真 px），所以：
-#:   * 耳麦圆心在第 ``ANTENNA_POD_ROWS`` 格（= 2.75 px / 0.5），上半圆在它上面；
+#:   * 耳麦圆心在横向第 ``anchor_col`` 格、纵向第 ``anchor_row`` 格（见 `antenna_board_anchor`）；
 #:   * 触角从圆心朝外 11.2 px = 22.4 格。
-#: 之前画板只按"3 × 11.2 的触角"定尺寸（8×24），于是**耳麦和内圈整个在画布外面**，
-#: 参考线只能露出半个圆 —— 用户 2026-10-31 报的"下半部分截断"就是这个。
+#:
+#: 2026-10-31（用户第三条）：画板从"只有触角"扩到"触角尖 → 下巴、耳麦外缘 → 脑袋中线"。
+#: 扩的理由不是好看：贴着下巴与脸颊的那一圈**在屏幕上离天线最近**，想画须子/挂饰
+#: 就必须能画到那儿。第一版只给 3×11.2 的触角（8×24 格），连耳麦和内圈都在画布外。
 ANTENNA_POD_ROWS = 5.5
 ANTENNA_POD_DIAMETER_PX = 5.0
 ANTENNA_STALK_WIDTH_PX = 3.0
 ANTENNA_STALK_LENGTH_PX = 11.2
 
+#: 耳麦圆心 → **脑袋中线**的横向距离（画板右侧要够到这条线）。
+#:
+#: 来源 `og.cs:2185`：耳麦挂在 `head + perp * clamp(Lerp(7, 5, |look.x|) * sign, -11, 11)`。
+#: 正脸（`look.x = 0`）时是 7.0 px；侧看时缩到 5.0 px —— 取 7.0 是因为画板画的是
+#: "正着看的脸"（特写预览也固定在 look=0），侧看时中线会落在画布里面一点，不会画不到。
+ANTENNA_HEAD_MIDLINE_PX = 7.0
+
+#: 耳麦圆心 → **下巴最低点**（画板下缘要够到这儿）。
+#:
+#: **实测值，指不到单行源码**（属于 §1 规则 2 的"设计增补"，推导链写在这里）：
+#: 头与躯干的平衡距离是约束解出来的，实测 `|head - body0| = 13.99 px`
+#: （1138×608、seed 1234、跑满 320 tick）；
+#: 下巴圆心 = `renderer.py:1024` 的 `head + (body0-head)*0.15` → 2.10 px；
+#: 下巴半径 = `Circle20 * HEAD_RAD/15 / 2` = 3.33 px；合计 **5.43 px**。
+#: 它比头精灵的下缘（4.55 px）还低一格，所以画板下缘按下巴算，不按脑袋算。
+ANTENNA_CHIN_BOTTOM_PX = 5.43
+
 
 def antenna_pod_center_row(height: int) -> float:
-    """画板上**耳麦圆心**在第几行（**从底部数**，画板底部是耳麦、顶部是触角尖）。
+    """**第一版**的耳麦圆心行：从底部往上 ``ANTENNA_POD_ROWS`` 格。
 
-    为什么从底部数：屏幕上天线是朝**外上方**伸的，画板要跟屏幕一致 —— 尖在顶、耳麦在底。
-    前两版把耳麦放在顶部，玩家在画板上画的图形到屏幕上就整体颠倒（用户 2026-10-31 两次报）。
+    只在"没存锚点的旧图"上还用（见 :func:`antenna_anchor`）。新画板的圆心行是
+    ``antenna_board_anchor()`` 给的、从**顶部**数的 24 格，两者不是一回事。
     """
     return height - 1 - ANTENNA_POD_ROWS
 
 
-def antenna_board_size(cell: float = 0.5) -> tuple[int, int]:
-    """整条侧边部件在该格子尺寸下要占多少格（+ 各 1 格余量）。"""
+def antenna_board_anchor(cell: float = 0.5) -> tuple[float, float]:
+    """新画板的耳麦圆心在**第几格**（col, row，都从左上角数）。
+
+    左/上要给"圆外那半圈 + 整根触角"留位置，右/下要给"脑袋中线 + 下巴"留位置，
+    所以圆心是**偏左上**的（6, 24），不是画布中心。这也是为什么锚点要跟着图一起存：
+    画板不对称了，"居中"这条隐含假设就不成立了。
+    """
     cell = max(0.05, float(cell))
-    width = int(ANTENNA_POD_DIAMETER_PX / cell) + 2
-    height = int((ANTENNA_POD_ROWS + ANTENNA_STALK_LENGTH_PX / cell)) + 2
-    return max(4, width), max(6, height)
+    outward = int(ANTENNA_POD_DIAMETER_PX * 0.5 / cell) + 1     # 圆心左侧（外）1 格余量
+    upward = int(ANTENNA_STALK_LENGTH_PX / cell) + 2            # 圆心上方（触角尖）2 格余量
+    return float(outward), float(upward)
+
+
+def antenna_anchor(
+    width: int, height: int, anchor=None
+) -> tuple[float, float]:
+    """这张图画在哪个位置：**耳麦圆心的格子坐标**（col, row，从左上角数）。
+
+    两种含义不同的旧约定必须都认，否则玩家已经画好的天线会整体漂 2.5 px：
+
+    * ``anchor`` 给了（v0.2.1 起新画的图会随卡存）→ 就是它；
+    * 没给（第一版的 12×29 图）→ 横向居中、纵向 ``h-1-5.5``，也就是第一版的公式。
+    """
+    if anchor is not None:
+        try:
+            col, row = float(anchor[0]), float(anchor[1])
+            return col, row
+        except (TypeError, ValueError, IndexError):
+            pass
+    return width * 0.5, antenna_pod_center_row(height)
+
+
+def antenna_board_size(cell: float = 0.5) -> tuple[int, int]:
+    """整块天线画板要多少格：**触角尖 → 下巴**、**耳麦外缘 → 脑袋中线**。"""
+    cell = max(0.05, float(cell))
+    outward = int(ANTENNA_POD_DIAMETER_PX * 0.5 / cell) + 1
+    inward = int(ANTENNA_HEAD_MIDLINE_PX / cell) + 2            # 到中线再留 2 格
+    upward = int(ANTENNA_STALK_LENGTH_PX / cell) + 2
+    downward = int(ANTENNA_CHIN_BOTTOM_PX / cell) + 2           # 到下巴底再留 2 格
+    return max(4, outward + inward), max(6, upward + downward)
 
 
 HEADPIECE_MODES = {
@@ -279,6 +339,14 @@ def build_appearance(key: str, base: str = "pebbles", override: dict | None = No
     antenna_scale = override.get("antenna_scale")
     if isinstance(antenna_scale, (int, float)) and not isinstance(antenna_scale, bool):
         patch["antenna_scale"] = max(0.2, min(2.0, float(antenna_scale)))
+    # 耳麦锚点：给了就记下（画板扩尺寸后靠它把图摆回原位）；没给/写坏了就保持 None，
+    # 让 `antenna_anchor()` 走第一版的老约定。
+    anchor = override.get("antenna_anchor")
+    if isinstance(anchor, (list, tuple)) and len(anchor) == 2:
+        try:
+            patch["antenna_anchor"] = (float(anchor[0]), float(anchor[1]))
+        except (TypeError, ValueError):
+            pass
 
     return replace(template, **patch)
 
