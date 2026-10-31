@@ -25,6 +25,10 @@ TEMPLATES = (
     ("worldbook.json", "worldbook.json"),
     ("characters/pebbles.json", "characters/pebbles.json"),
     ("characters/past_moon.json", "characters/past_moon.json"),
+    # 2026-10-30 用户写完的初版角色卡：这两人现在还**选不到**（外观注册表只有上面两位，
+    # `pet_window.set_character` 会拒绝未知 key），先把卡发出去，等"自定义迭代器"那一版接上。
+    ("characters/no_significant_harassment.json", "characters/no_significant_harassment.json"),
+    ("characters/seven_red_suns.json", "characters/seven_red_suns.json"),
 )
 DIRECTORIES = ("characters", "chats")
 

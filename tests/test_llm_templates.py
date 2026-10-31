@@ -27,6 +27,9 @@ def test_first_run_writes_all_templates(tmp_path):
         "worldbook.json",
         "characters/pebbles.json",
         "characters/past_moon.json",
+        # 2026-10-30 初版角色卡：后两位暂时选不到，但卡要随包发出去
+        "characters/no_significant_harassment.json",
+        "characters/seven_red_suns.json",
     }
     assert (tmp_path / "chats").is_dir(), "chats/ 也要建出来（历史写这里）"
     for name in written:
@@ -61,6 +64,9 @@ def test_shipped_templates_match_the_docs(tmp_path):
         ("worldbook.json", DOCS / "worldbook.json"),
         ("characters/pebbles.json", DOCS / "characters" / "pebbles.json"),
         ("characters/past_moon.json", DOCS / "characters" / "past_moon.json"),
+        ("characters/no_significant_harassment.json",
+         DOCS / "characters" / "no_significant_harassment.json"),
+        ("characters/seven_red_suns.json", DOCS / "characters" / "seven_red_suns.json"),
     ]
     shipped = llm_templates.assets_dir()
     for relative, doc_path in pairs:

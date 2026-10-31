@@ -22,7 +22,7 @@ DEFAULT_OUT = ROOT / "dist"
 FOLDER = "迭代器"
 EXE_NAME = "启动"
 
-README = """迭代器 · 桌面宠物
+README = r"""迭代器 · 桌面宠物
 ==================
 
 怎么开始
@@ -58,6 +58,31 @@ README = """迭代器 · 桌面宠物
 沙箱/下载工具建的目录）。Windows 会拒绝 Low 完整性进程注册托盘图标，
 表现就是"托盘里没有图标"。普通目录（桌面、下载、D 盘自建文件夹）都没问题。
 
+大语言模型
+----------
+右键人偶 →「大语言模型…」：勾「启用大语言模型」→ 选服务（默认 DeepSeek）→ 填 API Key →
+点「获取模型」 → 按你的喜好勾选控制行为/阅读文件并设置会发给LLM的历史对话条数 → 保存。
+
+  1. （勾了才生效）LLM 可以有限地控制行为。目前只是一个框架，所以迭代器能做的很有限：
+     过来看看你、靠近你，以及企图用神秘小技能杀掉你（五块卵石特供！）。
+  2. （勾了才生效）LLM 可以阅读你拖到她们脑袋上的文件。.txt .md .csv .doc .docx .xlsx
+     会阅读正文（每个文件最多 10000 字，超出部分截断），其他文件只读文件名。
+     可识别的区域会出现「+复制」。
+  3. 以「即时广播-」开头的文件会被当成**直接对迭代器说话**，不读正文。
+  4. 提示词里有角色输出字数限制和简易反注入，别拿迭代器当通用助手用。
+
+和这个功能有关的文件（都在本文件夹里，可以直接用记事本改）：
+    llm.json              连接与采样设置（**里面有明文 api_key，别把这个文件发给别人**）
+    worldbook.json        世界书
+    characters/*.json     角色卡
+    chats/<角色>.jsonl    对话历史（长期保存）
+
+隐私提醒
+--------
+  * 拖给她的文本，**正文会被发给你自己选的服务商**（DeepSeek 等），并且**长期写进
+    chats/<角色>.jsonl**。不建议把隐私内容喂给她。
+  * 角色卡和世界书里写的内容同样会随每次请求发出去。
+
 数据放在哪
 ----------
   全都在**本文件夹**（和 启动.exe 并排，不往 C 盘写）：
@@ -65,6 +90,10 @@ README = """迭代器 · 桌面宠物
     lines.json      迭代器说的话（可以自己加，两秒内生效；菜单「编辑对话文件」直接打开）
     launcher.log    启动过程日志（排障用）
     cache/          从你本机游戏里切出来的图元（删了会自动重切）
+    llm.json        大语言模型的连接设置（第一次启动才生成）
+    worldbook.json  世界书（第一次启动才生成）
+    characters/     角色卡（第一次启动才生成）
+    chats/          对话历史（第一次启动才生成）
   如果把这个文件夹放在只读位置（例如 Program Files），会退回 %LOCALAPPDATA%\IteratorPet\。
 
 卸载：删掉本文件夹即可（数据都在里面）。
@@ -98,10 +127,26 @@ def main() -> int:
     stage = out_dir / FOLDER
     if stage.exists():
         shutil.rmtree(stage)
-    # 运行时数据不进包：cache/ 是游戏素材（硬规则），config.json 会带开发机设置，
-    # launcher.log 是日志。lines.json 例外——它是默认台词表，随包发出去，玩家解压即可见。
-    skip = shutil.ignore_patterns("cache", "sprites", "config.json", "launcher.log")
+    # 运行时数据不进包。**注意：`ignore_patterns` 是按「文件名」匹配整棵树的**，
+    # 用它排除根目录的 `llm.json` / `worldbook.json` / `characters` 会连
+    # `_internal/iterator_pet/assets/llm/` 里的**随包模板**一起删掉
+    # （2026-10-30 实际踩到：zip 里 assets/llm 一个文件都没有，玩家拿到的 LLM
+    #   功能没有任何默认世界书和角色卡）。所以这里只按目录名排除 cache/sprites，
+    # 根目录那些运行时文件**拷完之后逐个删**，作用域精确到根。
+    #
+    # 为什么必须删：llm.json 里有开发机的**明文 api_key**（审计 A9）；chats/ 是真实
+    # 对话历史（隐私）；config.json 带开发机设置；worldbook.json / characters/ 在根目录
+    # 是开发机自己改过的那份，随包模板的真相源是 `assets/llm/`，不能两处漂移。
+    skip = shutil.ignore_patterns("cache", "sprites")
     shutil.copytree(dist, stage, ignore=skip)
+    for name in ("config.json", "launcher.log", "llm.json", "worldbook.json"):
+        target = stage / name
+        if target.is_file():
+            target.unlink()
+    for name in ("chats", "characters"):
+        target = stage / name
+        if target.is_dir():
+            shutil.rmtree(target)
     # 保证包里有默认台词表：玩家解压后它就在 启动.exe 旁边，一眼能看到、直接能改。
     if not (stage / "lines.json").exists():
         import json as _json
@@ -121,6 +166,27 @@ def main() -> int:
         print("[pack] 补上默认 lines.json")
 
     (stage / "使用说明.txt").write_text(README, encoding="utf-8-sig")
+
+    # 出厂自检：下面任何一条错，都是"玩家拿到残包"而且**不会报错**的形态。
+    # （tray.png 当年就是这么静默漏掉的，退出码还是 0。）
+    problems: list[str] = []
+    if not (stage / f"{EXE_NAME}.exe").is_file():
+        problems.append(f"缺 {EXE_NAME}.exe")
+    llm_assets = stage / "_internal" / "iterator_pet" / "assets" / "llm"
+    for relative in ("llm.json", "worldbook.json",
+                     "characters/pebbles.json", "characters/past_moon.json",
+                     "characters/seven_red_suns.json",
+                     "characters/no_significant_harassment.json"):
+        if not (llm_assets / relative).is_file():
+            problems.append(f"缺包内模板 assets/llm/{relative}")
+    for leaked in ("llm.json", "worldbook.json", "config.json", "launcher.log",
+                   "chats", "characters", "cache"):
+        if (stage / leaked).exists():
+            problems.append(f"根目录泄漏了运行时数据：{leaked}")
+    if problems:
+        for line in problems:
+            print(f"[pack] 失败：{line}")
+        return 3
 
     target = out_dir / f"{FOLDER}-v{version()}-win64.zip"
     if target.exists():

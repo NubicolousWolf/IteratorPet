@@ -273,7 +273,9 @@ def test_settings_degrades_to_typing_when_fetch_fails(tmp_path, error, expected)
 
     assert dialog.model_box.isEditable(), "拉不到列表必须能手填（审计 A10）"
     text = dialog.status.text()
-    assert expected in text and "手填" in text
+    # 2026-10-30 用户重写了设置页文案（把"可以直接手填"那句删了），这里不再断言
+    # 那个词——**A10 的能力**由上面那条 isEditable 钉住，文案不是合同。
+    assert expected in text
     assert SECRET not in text
     dialog.close()
 

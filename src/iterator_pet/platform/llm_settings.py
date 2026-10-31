@@ -89,7 +89,7 @@ class LLMSettingsDialog(QDialog):
         outer.setSpacing(9)
 
         # 总开关放最上面：想安静时不用清 key（用户 2026-10-30）
-        self.enabled = QCheckBox("启用大语言模型（关掉就完全离线，对话退回本地台词）")
+        self.enabled = QCheckBox("启用大语言模型（关闭时使用本地台词）")
         outer.addWidget(self.enabled)
 
         self.provider_deepseek = QRadioButton("DeepSeek 官方")
@@ -157,7 +157,7 @@ class LLMSettingsDialog(QDialog):
         self.history = QSpinBox()
         self.history.setRange(0, 50)
         self.history.setSuffix(" 条")
-        history_hint = QLabel("0 = 不带历史；一条消息算一条（她一条、玩家一条各算一条）")
+        history_hint = QLabel("0 = 不带历史")
         history_hint.setStyleSheet("color:#777; font-size:11px;")
         outer.addLayout(self._row("历史", self.history, history_hint))
 
@@ -176,15 +176,15 @@ class LLMSettingsDialog(QDialog):
             box.setToolTip("冷却只影响\"多久能再说一句\"；0 = 不限")
         for caption, box in (("拖拽后", self.cooldown_drag),
                              ("搭话后", self.cooldown_talk),
-                             ("仪式后", self.cooldown_ritual)):
+                             ("发怒后", self.cooldown_ritual)):
             cooldowns.addWidget(QLabel(caption))
             cooldowns.addWidget(box)
             cooldowns.addSpacing(6)
         cooldowns.addStretch(1)
         outer.addLayout(self._row("冷却", cooldowns))
 
-        self.allow_actions = QCheckBox("允许控制行动（investigate / talk / 起仪式）")
-        self.file_drop = QCheckBox("把文件拖到人偶上时，把文件名交给 LLM")
+        self.allow_actions = QCheckBox("允许控制行动")
+        self.file_drop = QCheckBox("允许阅读文件(txt/md/docx/csv/xlsx文件会读内容)")
         toggles = QVBoxLayout()
         toggles.setContentsMargins(0, 0, 0, 0)
         toggles.setSpacing(4)
@@ -269,12 +269,12 @@ class LLMSettingsDialog(QDialog):
 
         hints = []
         if not llm_config.has_key(cfg):
-            hints.append("还没有 API Key：填上（或设环境变量）才能拉模型。")
+            hints.append("还没有 API Key。")
         if not cfg.model:
-            hints.append("还没选模型：先「拉取模型」再选一个（也可以直接手填名字）。")
+            hints.append("还没选模型：先「拉取模型」再选一个。")
         if self.store.last_error and cfg.model:
             hints.append(self.store.last_error)
-        self._set_status("；".join(hints) or "填好 key → 拉取模型 → 选一个 → 保存。")
+        self._set_status("；".join(hints) or "操作步骤：填好 key → 拉取模型 → 选择模型 → 测试链接 → 保存。")
 
     def collect(self) -> llm_config.LLMConfig:
         """UI → :class:`LLMConfig`（不落盘，``_save`` 才落盘）。"""
@@ -396,16 +396,16 @@ class LLMSettingsDialog(QDialog):
         self.fetch_button.setEnabled(True)
         if not result.ok:
             # 退化成手填：下拉框本来就是可编辑的，这里只把原因说清楚（A10）
-            self._set_status(f"拉取模型失败：{result.reason}。可以直接在「模型」里手填名字。")
+            self._set_status(f"拉取模型失败：{result.reason}。")
             return
         keep = self.model_box.currentText().strip()
         self._set_models(list(result.models), keep=keep)
-        self._set_status(f"已拉取 {len(result.models)} 个模型，选一个再「保存」。")
+        self._set_status(f"已拉取 {len(result.models)} 个模型。")
 
     def _on_probe(self, result: llm_models.FetchResult) -> None:
         self.probe_button.setEnabled(True)
         if result.ok:
-            self._set_status("连接正常（HTTP 200）。可以点「保存」了。")
+            self._set_status("连接正常（HTTP 200）。")
         else:
             self._set_status(f"连接失败：{result.reason}")
 
@@ -433,7 +433,7 @@ class LLMSettingsDialog(QDialog):
             self._set_status("Base URL 要以 http:// 或 https:// 开头。")
             return
         if not cfg.model:
-            self._set_status("先选一个模型（拉列表，或者手填名字）。")
+            self._set_status("先选一个模型。")
             return
         if not self.store.save(cfg):
             self._set_status(f"保存失败：{self.store.last_error}")
