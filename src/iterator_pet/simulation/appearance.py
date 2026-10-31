@@ -41,6 +41,9 @@ class Appearance:
     leg_taper: bool
     # og.cs:341-361  Gown.Color(f)
     gown: Callable[[float], tuple[int, int, int]]
+    # og.cs:2238-2254  第三只眼（IsMoon || IsPastMoon || IsStraw）
+    third_eye: bool
+    third_eye_colour: tuple[int, int, int] | None
     # 光环。源码里环/bit 是**黑色**，颜色来自房间灯（`ForegroundLights`），
     # 桌面端没有光照系统，所以这个值是**实机截图采样**（见各实例的注释）。
     halo: tuple[int, int, int]
@@ -93,6 +96,8 @@ PEBBLES = Appearance(
     # 这两个值就是"接通前实际画出来的颜色"（int(215*1.05)=225 …），所以观感零变化；
     # 从这一版起它才真正可改。（`constants.HALO_SPARK_COLOUR` 那个从未生效的意图一并删了。）
     halo_spark=(225, 128, 92),
+    third_eye=False,
+    third_eye_colour=None,
 )
 
 PAST_MOON = Appearance(
@@ -112,6 +117,13 @@ PAST_MOON = Appearance(
     halo=(196, 103, 116),
     halo_spark=(205, 108, 121),
     tremble_only=True,
+    third_eye=True,
+    # og.cs:2373-2376  Color.Lerp(new Color(1,0,1), skin, 0.3f)
+    third_eye_colour=(
+        int(255 + (33 - 255) * 0.3),
+        int(0 + (135 - 0) * 0.3),
+        int(255 + (175 - 255) * 0.3),
+    ),
 )
 
 CHARACTERS = {"pebbles": PEBBLES, "past_moon": PAST_MOON}
@@ -153,7 +165,8 @@ def antenna_board_size(cell: float = 0.5) -> tuple[int, int]:
 
 
 HEADPIECE_MODES = {
-    "none": "无（跟随基底：源码有几个部件就画几个）",
+    "inherit": "跟随基底（皓月有圆点、卵石没有）",
+    "none": "无",
     "pixel": "自定义像素画",
 }
 
@@ -203,15 +216,24 @@ def build_appearance(key: str, base: str = "pebbles", override: dict | None = No
 
     skin = patch.get("skin", template.skin)
     mode = str(override.get("headpiece_mode") or "").strip().lower()
-    if mode == "pixel":
+    if mode == "none":
+        # 明确不要头饰：连源码那颗第三只眼一起关掉（自定义角色套皓月模板时的默认值）
+        patch["third_eye"] = False
+        patch["third_eye_colour"] = None
+        patch["headpiece"] = None
+    elif mode == "pixel":
         art = PixelArt.from_dict(override.get("headpiece_pixels"))
         if art is not None and not art.is_empty():
             patch["headpiece"] = art
+            # 自己画了 → 不再叠源码那颗圆点
+            patch["third_eye"] = False
+            patch["third_eye_colour"] = None
         else:
             # 选了"自定义像素画"但画布是空的 → 当作没开，别留一个看不见的状态
             patch["headpiece"] = None
-    # 2026-10-31 用户拍板：**第三只眼整个删掉**（编辑器里的选项、渲染、数据结构全删）。
-    # 它的作用已经被自定义像素头饰替代；"无"就是真的什么都不画。
+    # "inherit"（或没给）：**一个字段都不碰**，跟随基底的源码行为。
+    # 2026-10-31 用户澄清：要改的是"自定义角色套皓月模板时的默认值"，
+    # **不是**删掉仰望皓月本人的第三只眼（og.cs:2238-2254 给 DM 画的那颗）。
 
     scale = override.get("headpiece_scale")
     if isinstance(scale, (int, float)) and not isinstance(scale, bool):

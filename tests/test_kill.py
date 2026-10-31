@@ -266,8 +266,9 @@ def test_past_moon_appearance_matches_the_dm_branch():
     from iterator_pet.simulation.appearance import PAST_MOON, PEBBLES
 
     assert PAST_MOON.tremble_only is True
-    # 第三只眼 2026-10-31 按用户拍板**整个删掉**（作用被自定义像素头饰替代），
-    # 所以这里不再断言它；DM 分支剩下的差异仍然要钉住。
+    # 第三只眼是 DM 的源码外观（og.cs:2238-2254）。2026-10-31 用户澄清过：
+    # 改的是“自定义角色套皓月模板时的默认值”，**不是**删掉仰望皓月本人的这颗。
+    assert PAST_MOON.third_eye is True
     # og.cs:2298-2300 / 2169 / 1939 / 2197 / 1913-1916
     assert PAST_MOON.skin == (33, 135, 175)
     assert PAST_MOON.eye_scale_y == 3.0

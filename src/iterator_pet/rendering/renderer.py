@@ -1049,6 +1049,8 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
             eye, QRectF(eye.rect()))
         painter.restore()
 
+    # og.cs:2238 第三只眼在头和两只眼之后画（只有 inherit/源码那支才有）
+    draw_third_eye(painter, state)
 
 
 def _art_pixmap(art):
@@ -1108,6 +1110,45 @@ def draw_headpiece(painter: QPainter, state: RenderState) -> None:
         pixmap,
         QRectF(pixmap.rect()),
     )
+    painter.restore()
+
+
+def draw_third_eye(painter: QPainter, state: RenderState) -> None:
+    """``og.cs:2238-2254`` 第三只眼（IsMoon || IsPastMoon || IsStraw）。
+
+    ```csharp
+    p = head + perp*(look.x*2.5) + axis*(-2 - look.y*1.5);
+    rotation = AimFromOneVectorToAnother(p, head - axis*10);
+    scaleX = Lerp(0.2, 0.15, |look.x|);         // Circle20 => 4.0 .. 3.0 px
+    scaleY = LerpMap(look.y, 0, 1, 0.2, 0.05);  //          => 4.0 .. 1.0 px
+    ```
+    颜色在 ``og.cs:2373-2376``：``Lerp(magenta, skin, 0.3)``。
+
+    2026-10-31：用户澄清过——自定义角色套皓月模板时头顶部件默认为“无”，
+    但**仰望皓月本人的这颗圆点要留着**（那是她的源码外观）。
+    """
+    ap = state.appearance
+    if not ap.third_eye or ap.third_eye_colour is None:
+        return
+    axis = C.dir_vec(state.head, state.body0)
+    perp = (axis[1], -axis[0])
+    look = face_look(state.look_dir, axis)
+    offset = -2.0 - look[1] * 1.5
+    px = state.head[0] + perp[0] * (look[0] * 2.5) + axis[0] * offset
+    py = state.head[1] + perp[1] * (look[0] * 2.5) + axis[1] * offset
+    width = 20.0 * C._lerp(0.2, 0.15, abs(look[0]))
+    t = max(0.0, min(1.0, look[1]))
+    height = 20.0 * C._lerp(0.2, 0.05, t)
+    # 局部 +y 要对准“从眼睛指回头部”（AimFromOneVectorToAnother 的差向）
+    aim_x = (state.head[0] - axis[0] * 10.0) - px
+    aim_y = (state.head[1] - axis[1] * 10.0) - py
+    theta = degrees(atan2(-aim_x, aim_y))
+    sprite = tinted("Circle20", ap.third_eye_colour)
+    painter.save()
+    painter.translate(QPointF(px, py))
+    painter.rotate(theta)
+    painter.drawPixmap(QRectF(-width * 0.5, -height * 0.5, width, height),
+                       sprite, QRectF(sprite.rect()))
     painter.restore()
 
 

@@ -249,17 +249,32 @@ def test_build_appearance_turns_the_pixel_headpiece_on():
     assert empty.headpiece is None, "选了自定义但没画东西 → 当作没开"
 
 
-def test_headpiece_mode_none_draws_nothing_at_all():
-    """「无」就是真的什么都没有。
+def test_headpiece_modes_inherit_none_and_pixel():
+    """三种模式各管一件事（用户 2026-10-31 澄清的分工）：
 
-    2026-10-31 用户拍板：第三只眼**整个删掉**（编辑器选项、渲染函数、数据结构全删），
-    它的作用已经被自定义像素头饰替代 —— 所以应用仰望皓月模板时头顶部件默认为“无”。
+    * ``inherit``：跟随基底 —— 皓月有那颗第三只眼（`og.cs:2238-2254`），卵石没有；
+    * ``none``：明确不要 —— **自定义角色套皓月模板时的默认值**，不该白得一颗圆点；
+    * ``pixel``：玩家自己画。
     """
-    for base in ("pebbles", "past_moon"):
-        appearance = ap.build_appearance("x", base, {"headpiece_mode": "none"})
-        assert appearance.headpiece is None, f"{base} 的“无”不许有头饰"
-    assert not hasattr(ap.PAST_MOON, "third_eye"), "第三只眼已经从数据模型里删掉"
-    assert not hasattr(ap.PEBBLES, "third_eye")
+    inherit_moon = ap.build_appearance("x", "past_moon", {"headpiece_mode": "inherit"})
+    assert inherit_moon.third_eye is True, "皓月本人的第三只眼必须留着"
+    assert inherit_moon.headpiece is None
+    inherit_pebbles = ap.build_appearance("x", "pebbles", {"headpiece_mode": "inherit"})
+    assert inherit_pebbles.third_eye is False, "卵石本来就没有"
+
+    none_moon = ap.build_appearance("x", "past_moon", {"headpiece_mode": "none"})
+    assert none_moon.third_eye is False, "「无」就是连第三只眼也不要"
+    assert none_moon.headpiece is None
+
+    assert ap.PAST_MOON.third_eye is True, "仰望皓月自己的数据不许被改掉"
+    assert ap.PEBBLES.third_eye is False
+
+    art = PixelArt.blank()
+    art.set(11, 2, "#ffcc00")
+    pixel = ap.build_appearance("x", "past_moon", {
+        "headpiece_mode": "pixel", "headpiece_pixels": art.to_dict(),
+    })
+    assert pixel.headpiece is not None and pixel.third_eye is False, "自己画了就别叠圆点"
 
 
 def test_builtin_spark_colour_equals_what_the_renderer_drew_before_it_was_wired():

@@ -4,8 +4,13 @@
 
     python -m pytest -m workshop      # 改编辑器
     python -m pytest -m llm           # 改大模型
-    python -m pytest -m sim           # 改仿真/渲染
+    python -m pytest -m sim           # 改仿真/渲染（注意：这会把 slow 也算上，见下）
     python -m pytest                   # 默认：全部非 slow（跳过长仿真）
+
+**命令行 `-m` 会顶掉 `pytest.ini` 里的 `addopts`**，所以按组跑时要自己带上 slow 过滤：
+
+    python -m pytest -m "sim and not slow"      # 日常改仿真
+    python -m pytest -m "not slow"              # 日常全量（默认就是这个）
 
 分组标记由 ``pytest.ini`` 声明；``slow`` 标在用例上（见各文件），默认被
 ``addopts = -m "not slow"`` 排掉。发布前跑**真·全量**：

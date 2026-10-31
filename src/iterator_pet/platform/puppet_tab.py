@@ -646,7 +646,10 @@ class PuppetTab(QWidget):
             }
             for field, value in colours.items():
                 self.buttons[field].set_colour(_hex(value))
-            mode = str(draft.get("headpiece_mode") or "none")
+            # 内置两位默认"跟随基底"（皓月那颗圆点是她的源码外观）；自定义角色默认"无"——
+            # 不该因为套了皓月模板就白得一颗第三只眼（用户 2026-10-31 澄清）。
+            default_mode = "inherit" if key in ap.CHARACTERS else "none"
+            mode = str(draft.get("headpiece_mode") or default_mode)
             if mode not in self.mode_buttons:
                 mode = "none"
             self.mode_buttons[mode].setChecked(True)
@@ -724,7 +727,7 @@ class PuppetTab(QWidget):
             "pod_colour": list(template.pod_colour),
             "pod_rim_colour": list(template.pod_rim_colour),
             "antenna_colour": list(template.antenna_colour),
-            "headpiece_mode": "none",
+            "headpiece_mode": "inherit" if self.key in ap.CHARACTERS else "none",
         }
 
     def save(self) -> str:
