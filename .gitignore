@@ -32,8 +32,10 @@ sprites/
 config.json
 launcher.log
 # LLM 的配置与数据也在桌宠根目录。llm.json 里可能有**明文 api_key**，绝不能提交；
-# characters/ 与 chats/ 是玩家自己的角色卡和对话记录，同理。
+# characters/ 与 chats/ 是玩家自己的角色卡和对话记录；worldbooks/ 是每个角色独立的
+# 世界书（v0.2.0 起），同理。
 /llm.json
 /worldbook.json
+/worldbooks/
 /characters/
 /chats/
