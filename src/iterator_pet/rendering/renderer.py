@@ -726,34 +726,6 @@ def draw_cord(painter: QPainter, state: RenderState) -> None:
 # --------------------------------------------------------------------------
 # robe
 # --------------------------------------------------------------------------
-def _gown_rgb(appearance, f: float) -> tuple[int, int, int]:
-    """袍子某处的颜色：有玩家纹理时**从纹理里取**，否则走源码那条 HSL 渐变。
-
-    为什么袖子和袍身都要过这个函数：玩家画了衣袍纹理却只盖住躯干、两只袖子还是原来
-    的橙色，看起来像"只刷了半个身子"（2026-10-31 实测图 `_work/v019_boards.png`）。
-    袖子（`draw_puppet_hands` 的 `_limb_band`）本来就是袍子的一片，颜色必须同源。
-    """
-    art = getattr(appearance, "gown_art", None)
-    if art is None or art.is_empty():
-        return appearance.gown(f)
-    row = min(art.h - 1, max(0, int(round(max(0.0, min(1.0, f)) * (art.h - 1)))))
-    middle = art.pixels[row][art.w // 2]
-    if middle is not None:
-        return (int(middle[1:3], 16), int(middle[3:5], 16), int(middle[5:7], 16))
-    tones = [pixel for pixel in art.pixels[row] if pixel is not None]
-    if tones:
-        # 中间是透明就取这一行的平均色：宁可近似，也不要整条袖子消失
-        return tuple(
-            sum(int(t[i:i + 2], 16) for t in tones) // len(tones) for i in (1, 3, 5)
-        )
-    return appearance.gown(f)
-
-
-def _gown_colour(appearance, f: float) -> QColor:
-    """`:func:`_gown_rgb` 的 QColor 版本（给 QBrush 直接用）。"""
-    return qc(_gown_rgb(appearance, f), 255)
-
-
 def draw_gown(painter: QPainter, state: RenderState) -> None:
     """Fill the robe the way ``MakeGridMesh("Futile_White", divs-1)`` + vertex colours does.
 
@@ -789,28 +761,8 @@ def draw_gown(painter: QPainter, state: RenderState) -> None:
     painter.setPen(Qt.PenStyle.NoPen)
     # Underlay in a mid tone: the per-row bands below meet edge to edge, and with
     # antialiasing that can leave a hairline of background at a seam.
-    painter.setBrush(QBrush(_gown_colour(state.appearance, 0.5)))
+    painter.setBrush(QBrush(qc(state.appearance.gown(0.5), 255)))
     painter.drawPath(path)
-
-    # 玩家画的袍子纹理（2026-10-31）：袍身网格是 11×11 的四边形片，逐格取纹理颜色即可。
-    # 透明格回退到源码渐变，所以"只画一部分"也是安全的。
-    gown_art = state.appearance.gown_art
-    if gown_art is not None and not gown_art.is_empty():
-        painter.setPen(Qt.PenStyle.NoPen)
-        span = max(1, divs - 1)
-        for i in range(divs - 1):
-            tx = min(gown_art.w - 1, int(i * gown_art.w / span))
-            for j in range(divs - 1):
-                ty = min(gown_art.h - 1, int(j * gown_art.h / span))
-                colour = gown_art.pixels[ty][tx]
-                brush = (QColor(colour) if colour is not None
-                         else _gown_colour(state.appearance, j / (divs - 1.0)))
-                painter.setBrush(QBrush(brush))
-                painter.drawPolygon(QPolygonF([
-                    QPointF(*grid[i][j]), QPointF(*grid[i + 1][j]),
-                    QPointF(*grid[i + 1][j + 1]), QPointF(*grid[i][j + 1]),
-                ]))
-        return
 
     # Ten bands, one per grid-row pair, each filled with a gradient between that
     # pair's two colours. A single straight gradient cannot follow the rows: the
@@ -929,9 +881,8 @@ def draw_puppet_hands(painter: QPainter, state: RenderState) -> None:
         # the sleeve, so the cap has the lower index and is painted first.
         painter.drawPixmap(QRectF(tip[0] - 3.0, tip[1] - 3.0, 6.0, 6.0),
                            cap, QRectF(cap.rect()))
-        # 袖子也是袍子的一片：跟着玩家纹理走（见 `_gown_colour`）
         _limb_band(painter, anchor, tip, state.appearance.hand_half_w,
-                   _gown_rgb(state.appearance, 0.0), ctrl_a, ctrl_b)
+                   state.appearance.gown(0.0), ctrl_a, ctrl_b)
 
 
 def face_look(look_world, axis):
@@ -1011,32 +962,33 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
                cy - axis[1] * 40.0 - state.look_dir[1] * 10.0)
         aim = atan2(state.body0[1] - tip[1], state.body0[0] - tip[0]) * 180.0 / pi + 90.0
 
-        # 玩家画的侧边部件：一张图左右镜像（2026-10-31）。画在"触角那一端"的局部坐标系里
-        # —— 原点在耳麦中心、+y 顺着触角朝外，所以玩家画的方向就是它长出去的方向。
-        art = ap.antenna_art
-        if art is not None and not art.is_empty():
-            cell = float(ap.antenna_scale or 0.5)
-            width, height = art.w * cell, art.h * cell
-            painter.save()
-            painter.translate(QPointF(cx, cy))
-            painter.rotate(aim)
-            painter.scale(-1.0 if sign < 0 else 1.0, 1.0)
-            painter.drawPixmap(QRectF(-width * 0.5, 0.0, width, height),
-                               _art_pixmap(art), QRectF(0, 0, art.w, art.h))
-            painter.restore()
-            continue
-
+        # 玩家画的侧边部件：一张图左右镜像（2026-10-31）。画在"触角根部"的局部坐标系里
+        # —— 原点在耳麦中心、+y 顺着触角朝外。**耳麦本身仍由源码那两个圆画**
+        # （颜色可以改），玩家画板只管伸出去的那根。
         for part, scale in ((0, 1.0), (1, 0.8)):
             pod = tinted("Circle20", ap.pod_colour if part == 0 else ap.pod_rim_colour)
             w = pod_w * scale
             h = 5.5 * scale
             painter.drawPixmap(QRectF(cx - w * 0.5, cy - h * 0.5, w, h), pod, QRectF(pod.rect()))
-        # PhoneSprite(side, 2): LizardScaleA1 aimed from the body outward
-        antenna = tinted("LizardScaleA1", ap.antenna_colour)
+
         painter.save()
         painter.translate(QPointF(cx, cy))
         painter.rotate(aim)
-        painter.drawPixmap(QRectF(-1.5, 0.0, 3.0, 11.2), antenna, QRectF(antenna.rect()))
+        art = ap.antenna_art
+        if art is not None and not art.is_empty():
+            cell = float(ap.antenna_scale or 0.5)
+            width, height = art.w * cell, art.h * cell
+            painter.scale(-1.0 if sign < 0 else 1.0, 1.0)   # 左右镜像**只管自定义图**
+            # 画板约定：**底边 = 耳麦（根部）、顶边 = 尖**，和玩家在画板上看到的一致。
+            # 局部 +y 是从根部朝外，所以这里要再翻一次 y（2026-10-31 用户报"上下反了"）。
+            painter.scale(1.0, -1.0)
+            painter.drawPixmap(QRectF(-width * 0.5, -height, width, height),
+                               _art_pixmap(art), QRectF(0, 0, art.w, art.h))
+        else:
+            # PhoneSprite(side, 2): LizardScaleA1 aimed from the body outward
+            # （原版两次都画同一张，**不镜像** —— 镜像过会让 AA 边缘差 17/255）
+            antenna = tinted("LizardScaleA1", ap.antenna_colour)
+            painter.drawPixmap(QRectF(-1.5, 0.0, 3.0, 11.2), antenna, QRectF(antenna.rect()))
         painter.restore()
 
     # HeadSprite: Circle20 at (rad/9, rad/11), rotated with the body axis

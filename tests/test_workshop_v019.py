@@ -388,9 +388,9 @@ def test_recent_colours_show_up_after_using_them(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# 天线与衣袍画板
+# 天线画板
 # --------------------------------------------------------------------------
-def test_antenna_and_gown_boards_round_trip_through_the_card(tmp_path):
+def test_antenna_board_round_trips_through_the_card(tmp_path):
     (tmp_path / "characters").mkdir(parents=True)
     tab = PuppetTab(tmp_path)
     tab.load("pebbles")
@@ -398,55 +398,84 @@ def test_antenna_and_gown_boards_round_trip_through_the_card(tmp_path):
     antenna = tab.canvases["antenna"].art
     antenna.set(1, 1, "#ff0000")
     tab.antenna_enabled.setChecked(True)
-
-    gown = tab.canvases["gown"].art
-    gown.set(5, 5, "#00ff00")
-    tab.gown_enabled.setChecked(True)
     tab._mark_dirty()
 
     assert tab.save() == ""
     stored = llm_cards.read_appearance("pebbles", folder=tmp_path)
-    assert "antenna_pixels" in stored and "gown_pixels" in stored
+    assert "antenna_pixels" in stored
 
     other = PuppetTab(tmp_path)
     other.load("pebbles")
-    assert other.antenna_enabled.isChecked() and other.gown_enabled.isChecked()
+    assert other.antenna_enabled.isChecked()
     assert other.canvases["antenna"].art.get(1, 1) == "#ff0000"
-    assert other.canvases["gown"].art.get(5, 5) == "#00ff00"
 
 
-def test_boards_that_are_off_do_not_get_saved(tmp_path):
+def test_a_drawn_antenna_is_not_saved_while_the_switch_is_off(tmp_path):
     (tmp_path / "characters").mkdir(parents=True)
     tab = PuppetTab(tmp_path)
     tab.load("pebbles")
-    tab.canvases["gown"].art.set(3, 3, "#ffffff")     # 画了但开关没开
+    tab.canvases["antenna"].art.set(3, 3, "#ffffff")   # 画了但开关没开
     tab._mark_dirty()
     assert tab.save() == ""
     stored = llm_cards.read_appearance("pebbles", folder=tmp_path)
-    assert "gown_pixels" not in stored
+    assert "antenna_pixels" not in stored
 
 
-def test_appearance_carries_the_antenna_and_gown_pixels():
-    antenna = PixelArt.blank(12, 24)
+def test_the_gown_board_is_gone():
+    """衣袍画板做过又删了（用户 2026-10-31：效果不好）。别让它悄悄回来。"""
+    from iterator_pet.platform.puppet_tab import BOARDS
+
+    keys = [board[0] for board in BOARDS]
+    assert keys == ["headpiece", "antenna"]
+    assert not hasattr(ap.PEBBLES, "gown_art"), "渲染层的纹理分支也一起删干净"
+
+
+def test_both_boards_carry_a_reference_outline():
+    """参考线曾经整个消失过：`_paint_reference` 判的是 "head"，而构造时传的是 "headpiece"。
+
+    这里钉的是**每个画板都有非空的参考线类型**，而且两张图确实画出了东西。
+    """
+    from PySide6.QtGui import QImage, QPainter, QColor
+    from iterator_pet.platform.puppet_tab import BOARDS
+
+    kinds = {board[0]: board[5] for board in BOARDS}
+    assert kinds == {"headpiece": "head", "antenna": "antenna"}
+
+    for key, kind in kinds.items():
+        from iterator_pet.platform.puppet_tab import PixelCanvas
+
+        canvas = PixelCanvas(None, cell=6, reference=kind)
+        image = QImage(canvas.size(), QImage.Format.Format_ARGB32)
+        image.fill(QColor("#000000"))
+        painter = QPainter(image)
+        canvas._paint_reference(painter)
+        painter.end()
+        coloured = sum(
+            1
+            for y in range(image.height())
+            for x in range(image.width())
+            if image.pixelColor(x, y).blue() > 30 or image.pixelColor(x, y).red() > 190
+        )
+        assert coloured > 20, f"{key} 画板的参考线没画出来"
+
+
+def test_appearance_carries_the_antenna_pixels():
+    antenna = PixelArt.blank(8, 24)
     antenna.set(2, 3, "#abcdef")
-    gown = PixelArt.blank(11, 11)
-    gown.set(1, 1, "#123123")
 
     appearance = ap.build_appearance("x", "pebbles", {
         "antenna_pixels": antenna.to_dict(), "antenna_scale": 0.9,
-        "gown_pixels": gown.to_dict(),
         "pod_colour": "#101010", "pod_rim_colour": "#202020",
         "antenna_colour": "#303030",
     })
     assert appearance.antenna_art is not None
     assert appearance.antenna_scale == 0.9
-    assert appearance.gown_art is not None
     assert appearance.pod_colour == (16, 16, 16)
     assert appearance.antenna_colour == (48, 48, 48)
 
 
-def test_the_renderer_draws_all_three_custom_boards_without_blowing_up():
-    """三个画板一起开、真的画一遍 —— 预览和桌面走的是同一批函数。"""
+def test_the_renderer_draws_both_custom_boards_without_blowing_up():
+    """两个画板一起开、真的画一遍 —— 预览和桌面走的是同一批函数。"""
     from PySide6.QtGui import QImage, QPainter, QColor
     from iterator_pet.rendering import renderer as renderer
     from iterator_pet.simulation import constants as constants
@@ -454,20 +483,16 @@ def test_the_renderer_draws_all_three_custom_boards_without_blowing_up():
 
     head = PixelArt.blank()
     head.set(11, 2, "#ffcc00")
-    antenna = PixelArt.blank(12, 24)
+    antenna = PixelArt.blank(8, 24)
     for y in range(4, 20):
-        antenna.set(6, y, "#88ccff")
-    gown = PixelArt.blank(11, 11)
-    for y in range(11):
-        for x in range(11):
-            gown.set(x, y, "#3366aa" if (x + y) % 2 else "#224488")
+        antenna.set(4, y, "#88ccff")
 
     sim = SimulationState((0.0, 0.0, 260.0, 300.0), warmup=0, character="pebbles")
     for _ in range(20):
         sim.step(1.0 / constants.GAME_HZ)
     appearance = ap.build_appearance("x", "pebbles", {
         "headpiece_mode": "pixel", "headpiece_pixels": head.to_dict(),
-        "antenna_pixels": antenna.to_dict(), "gown_pixels": gown.to_dict(),
+        "antenna_pixels": antenna.to_dict(),
     })
     import dataclasses
 
@@ -479,4 +504,5 @@ def test_the_renderer_draws_all_three_custom_boards_without_blowing_up():
     renderer.draw_puppet_head(painter, state)
     painter.end()
     assert not image.isNull()
+
 

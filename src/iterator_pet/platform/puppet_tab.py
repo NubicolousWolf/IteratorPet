@@ -64,11 +64,14 @@ ANTENNA_FIELDS = (
     ("antenna_colour", "触角", "从耳麦朝外的一根（LizardScaleA1）"),
 )
 
-#: 三个画板：(键, 标题, 宽, 高, 每格像素)
+#: 两个画板：(键, 标题, 宽, 高, 每格像素, 参考线类型)
+#:
+#: 衣袍画板（11×11 采样到袍身网格）做过又删了（用户 2026-10-31：效果不好）。
+#: 原因是袍身是一个**会变形的布网格**，玩家画的方块贴上去会跟着扭曲、还被两只袖子
+#: 盖掉大半，画什么也看不出原样。留一块画不动的画板比没有更糟。
 BOARDS = (
-    ("headpiece", "头顶部件 24×20", DEFAULT_W, DEFAULT_H, 11),
-    ("antenna", "天线 12×24（左右镜像）", 12, 24, 9),
-    ("gown", "衣袍 11×11（按袍身网格采样）", 11, 11, 20),
+    ("headpiece", "头顶部件 24×20", DEFAULT_W, DEFAULT_H, 11, "head"),
+    ("antenna", "天线 8×24（左右镜像）", 8, 24, 11, "antenna"),
 )
 
 PREVIEW_W, PREVIEW_H = 250, 300
@@ -138,7 +141,7 @@ class PixelCanvas(QWidget):
         super().__init__(parent)
         self.art = art.copy() if art is not None else PixelArt.blank()
         self.cell = max(4, int(cell))
-        self.reference = reference          # "head" / "antenna" / "gown"
+        self.reference = reference          # "head" / "antenna"
         self.colour = "#ff66cb"
         self.brush = 1
         self.erasing = False
@@ -283,14 +286,22 @@ class PixelCanvas(QWidget):
                            self.cell, self.cell * 2.0)
                 )
         elif self.reference == "antenna":
-            # 耳麦圆心在本图 (w/2, 0)：源码里 pod 直径最大 5 px ≈ 10 格
+            # **原版触角的外轮廓**：3 px 宽 × 11.2 px 长（`renderer.py` 里那行
+            # `drawPixmap(QRectF(-1.5, 0.0, 3.0, 11.2))`），1 格 = 0.5 px → 6 格 × 22.4 格。
+            # 画板约定：**底边 = 根部（耳麦）、顶边 = 尖**，与渲染时的翻转一致。
+            painter.setPen(QPen(QColor(255, 200, 120, 150), 1, Qt.PenStyle.DashLine))
+            bar_w = 3.0 * 2.0
+            bar_h = 11.2 * 2.0
+            x0 = (self.art.w - bar_w) * 0.5
+            y0 = self.art.h - bar_h
+            painter.drawRect(
+                QRectF(x0 * self.cell, y0 * self.cell, bar_w * self.cell, bar_h * self.cell)
+            )
             painter.setPen(QPen(QColor(255, 255, 255, 90), 1, Qt.PenStyle.DashLine))
             painter.drawEllipse(
-                QPointF(self.art.w * 0.5 * self.cell, 0),
+                QPointF(self.art.w * 0.5 * self.cell, self.art.h * self.cell),
                 5.0 * self.cell, 5.0 * self.cell,
             )
-            painter.setPen(QPen(QColor(255, 200, 120, 120), 1, Qt.PenStyle.DashLine))
-            painter.drawLine(0, self.cell, self.width(), self.cell)
         else:
             painter.setPen(QPen(QColor(255, 255, 255, 70), 1, Qt.PenStyle.DashLine))
             painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
@@ -428,9 +439,6 @@ class PuppetTab(QWidget):
         self.antenna_enabled = QCheckBox("使用自定义天线（左右镜像同一张）")
         self.antenna_enabled.toggled.connect(self._on_mode)
         left.addWidget(self.antenna_enabled)
-        self.gown_enabled = QCheckBox("使用自定义衣袍纹理")
-        self.gown_enabled.toggled.connect(self._on_mode)
-        left.addWidget(self.gown_enabled)
 
         left.addSpacing(4)
         left.addWidget(QLabel("画笔"))
@@ -465,7 +473,7 @@ class PuppetTab(QWidget):
         head = QHBoxLayout()
         head.addWidget(QLabel("画板"))
         self.board_box = QComboBox()
-        for key, title, _w, _h, _cell in BOARDS:
+        for key, title, _w, _h, _cell, _ref in BOARDS:
             self.board_box.addItem(title, key)
         self.board_box.currentIndexChanged.connect(self._on_board)
         head.addWidget(self.board_box, 1)
@@ -476,8 +484,8 @@ class PuppetTab(QWidget):
         centre.addLayout(head)
 
         self.stack = QStackedWidget()
-        for key, _title, width, height, cell in BOARDS:
-            canvas = PixelCanvas(None, cell=cell, reference=key)
+        for key, _title, width, height, cell, reference in BOARDS:
+            canvas = PixelCanvas(None, cell=cell, reference=reference)
             canvas.setFixedSize(width * cell, height * cell)
             canvas.changed.connect(self._on_draw)
             canvas.picked.connect(self._on_picked)
@@ -571,9 +579,7 @@ class PuppetTab(QWidget):
 
             self.canvases["headpiece"].set_art(PixelArt.from_dict(draft.get("headpiece_pixels")))
             self.canvases["antenna"].set_art(PixelArt.from_dict(draft.get("antenna_pixels")))
-            self.canvases["gown"].set_art(PixelArt.from_dict(draft.get("gown_pixels")))
             self.antenna_enabled.setChecked(bool(draft.get("antenna_pixels")))
-            self.gown_enabled.setChecked(bool(draft.get("gown_pixels")))
             scale = draft.get("headpiece_scale")
             self._headpiece_scale = float(scale) if isinstance(scale, (int, float)) else 0.5
             antenna_scale = draft.get("antenna_scale")
@@ -611,14 +617,11 @@ class PuppetTab(QWidget):
             draft[field] = list(_rgb(self.buttons[field].colour()))
         draft["headpiece_mode"] = self.headpiece_mode()
         for key, field, scale in (("headpiece", "headpiece_pixels", self._headpiece_scale),
-                                  ("antenna", "antenna_pixels", self._antenna_scale),
-                                  ("gown", "gown_pixels", None)):
+                                  ("antenna", "antenna_pixels", self._antenna_scale)):
             art = self.canvases[key].art
             if art.is_empty():
                 continue
             if key == "antenna" and not self.antenna_enabled.isChecked():
-                continue
-            if key == "gown" and not self.gown_enabled.isChecked():
                 continue
             if key == "headpiece" and self.headpiece_mode() != "pixel":
                 continue
@@ -626,10 +629,8 @@ class PuppetTab(QWidget):
                 draft[field] = art.to_dict()
             except ValueError:
                 pass                      # 颜色太多：save() 里会明确报错，不静默丢
-            if scale is not None and key == "headpiece":
-                draft["headpiece_scale"] = scale
-            if key == "antenna":
-                draft["antenna_scale"] = scale
+            if scale is not None:
+                draft["headpiece_scale" if key == "headpiece" else "antenna_scale"] = scale
         return draft
 
     def _pristine_draft(self) -> dict:
@@ -653,8 +654,7 @@ class PuppetTab(QWidget):
     def save(self) -> str:
         draft = self.collect()
         for key, field in (("headpiece", "headpiece_pixels"),
-                           ("antenna", "antenna_pixels"),
-                           ("gown", "gown_pixels")):
+                           ("antenna", "antenna_pixels")):
             if field not in draft:
                 continue
             try:

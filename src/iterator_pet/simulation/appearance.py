@@ -69,8 +69,6 @@ class Appearance:
     # 玩家画的侧边部件（**左右镜像**同一张图）。None = 用源码那两个圆 + 一根触角。
     antenna_art: PixelArt | None = None
     antenna_scale: float = 0.5
-    # 玩家画的袍子纹理：按袍身网格逐格采样（11×11）。None = 用源码那条 HSL 渐变。
-    gown_art: PixelArt | None = None
 
 
 def _moon_gown(f: float) -> tuple[int, int, int]:
@@ -238,10 +236,6 @@ def build_appearance(key: str, base: str = "pebbles", override: dict | None = No
     antenna_scale = override.get("antenna_scale")
     if isinstance(antenna_scale, (int, float)) and not isinstance(antenna_scale, bool):
         patch["antenna_scale"] = max(0.2, min(2.0, float(antenna_scale)))
-
-    gown = PixelArt.from_dict(override.get("gown_pixels"))
-    if gown is not None and not gown.is_empty():
-        patch["gown_art"] = gown
 
     return replace(template, **patch)
 
