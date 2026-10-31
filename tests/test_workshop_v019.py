@@ -326,8 +326,9 @@ def test_workshop_opens_with_three_tabs_and_saves_both_files(tmp_path):
     book_path = _book_file(tmp_path)
     workshop = Workshop(book=wb.Worldbook(book_path), folder=tmp_path)
 
+    # 2026-10-31：台词编辑器收进工坊，成为第二个页签「本地对话」
     assert [workshop.tabs.tabText(i) for i in range(workshop.tabs.count())] == [
-        "人偶外观", "角色卡", "世界书"
+        "人偶外观", "本地对话", "角色卡", "世界书"
     ]
     assert workshop.puppet_tab.preview._snapshot is not None, "预览必须有真实快照"
     # v0.2.0 解锁了新建/复制；删除只对自定义角色开放（内置两位是源码数值，删了也还在）

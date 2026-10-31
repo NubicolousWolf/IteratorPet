@@ -6,7 +6,7 @@
    ``tremble_done``），冷却期内不再触发；
 2. 老 ``lines.json`` 里没有 ``ritual`` 这一组时**回落到内置默认**（不然更新后她就哑了），
    但玩家**故意清空**的组仍然沉默；
-3. 「自定义对话」编辑器的下拉里有第三项，能增删并保存。
+3. 工坊「本地对话」页的下拉里有第三项，能增删并保存。
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 import pytest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from iterator_pet.platform.dialogue_editor import DialogueEditor  # noqa: E402
+from iterator_pet.platform.dialogue_tab import DialogueTab  # noqa: E402
 from iterator_pet.simulation import constants as C  # noqa: E402
 from iterator_pet.simulation.events import DialogueEvents  # noqa: E402
 from iterator_pet.simulation.lines import Lines  # noqa: E402
@@ -120,21 +120,19 @@ def test_an_abort_is_not_a_ritual():
 
 
 # ---------------------------------------------------------------- 编辑器 --
-def test_the_editor_offers_the_ritual_group(tmp_path):
-    editor = DialogueEditor(Lines(path=tmp_path / "lines.json"))
-    items = [editor.event_box.itemText(i) for i in range(editor.event_box.count())]
+def test_the_dialogue_tab_offers_the_ritual_group(tmp_path):
+    tab = DialogueTab(Lines(path=tmp_path / "lines.json"))
+    items = [tab.event_box.itemText(i) for i in range(tab.event_box.count())]
     assert items == ["拖拽", "长时间静止", "仪式"]
-    editor.event_box.setCurrentIndex(2)
-    assert editor.list.count() == len(C.DEFAULT_LINES["characters"]["pebbles"]["ritual"])
-    editor.close()
+    tab.event_box.setCurrentIndex(2)
+    assert tab.list.count() == len(C.DEFAULT_LINES["characters"]["pebbles"]["ritual"])
 
 
-def test_the_editor_can_add_and_save_a_ritual_line(tmp_path):
+def test_the_dialogue_tab_can_add_and_save_a_ritual_line(tmp_path):
     lines = Lines(path=tmp_path / "lines.json")
-    editor = DialogueEditor(lines)
-    editor.event_box.setCurrentIndex(2)
-    editor.add_line()
-    editor.list.item(editor.list.count() - 1).setText("这次没有下一次。")
-    editor.save()
+    tab = DialogueTab(lines)
+    tab.event_box.setCurrentIndex(2)
+    tab.add_line()
+    tab.list.item(tab.list.count() - 1).setText("这次没有下一次。")
+    assert tab.save() == ""
     assert "这次没有下一次。" in lines.pool("pebbles", "ritual")
-    editor.close()

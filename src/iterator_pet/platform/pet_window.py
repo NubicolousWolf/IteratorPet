@@ -364,18 +364,6 @@ class PetWindow(PetCanvas):
         return getattr(self.config, "spark_rate", "eco")
 
     # -- 数据目录 -----------------------------------------------------------
-    def open_dialogue_editor(self) -> None:
-        """打开「自定义对话」GUI。
-
-        旧实现是 os.startfile(lines.json)：没有 .json 文件关联的机器会抛 WinError 1155，
-        又被 except OSError 静默吞掉 —— 用户看到的就是"点了没反应"。现在编辑全在程序里，
-        不依赖系统文件关联。
-        """
-        self.simulation.lines.install_default_file()
-        from .dialogue_editor import show_editor
-
-        self._dialogue_editor = show_editor(self.simulation.lines)
-
     def open_workshop(self) -> None:
         """打开「迭代器自定义」工作室（人偶外观 / 角色卡 / 世界书 三合一）。
 
@@ -395,6 +383,9 @@ class PetWindow(PetCanvas):
             current=self.character,
             on_saved=self._after_workshop_save,
             on_activate=self.set_character,
+            lines=self.simulation.lines,
+            dialogue_enabled=self.dialogue_enabled,
+            on_dialogue_enabled=self.set_dialogue_enabled,
         )
 
     def _after_workshop_save(self) -> None:
@@ -559,17 +550,6 @@ class PetWindow(PetCanvas):
             self._drop_log(f"drop 抛异常 {type(exc).__name__}: {exc}")
             self._drop_log("trace: " + traceback.format_exc().replace(chr(10), " | ")[:700])
             event.ignore()
-
-    def set_llm_enabled(self, enabled: bool) -> None:
-        """右键/托盘菜单的总开关：只改 ``enabled``，key 原样留着（用户 2026-10-30）。
-
-        关掉后 ``LLMClient.enabled`` 立刻为假，下一次 `request()` 就不会发包；
-        正在飞的那一个请求仍然会把结果收下来（收完就不再发新的）。
-        """
-        self.llm.config.enabled = bool(enabled)
-        self.llm.save()
-        self.apply_llm_settings()
-        self.update()
 
     # -- 调试：直接给她发一句话（菜单里的测试入口）--------------------------
     def debug_send_to_llm(self) -> None:
@@ -795,7 +775,7 @@ class PetWindow(PetCanvas):
             )
             spark_menu.addAction(action_rate)
 
-        character_menu = menu.addMenu("角色")
+        character_menu = menu.addMenu("当前角色")
         for key, label in self.character_list():
             action_character = QAction(label, character_menu)
             action_character.setCheckable(True)
@@ -809,21 +789,9 @@ class PetWindow(PetCanvas):
         action_workshop.triggered.connect(self.open_workshop)
         menu.addAction(action_workshop)
 
-        action_edit_lines = QAction("自定义对话", menu)
-        action_edit_lines.triggered.connect(self.open_dialogue_editor)
-        menu.addAction(action_edit_lines)
-
         action_llm = QAction("大语言模型…", menu)
         action_llm.triggered.connect(self.open_llm_settings)
         menu.addAction(action_llm)
-
-        action_llm_on = QAction("使用大语言模型", menu)
-        action_llm_on.setCheckable(True)
-        action_llm_on.setChecked(bool(getattr(self.llm.config, "enabled", True)))
-        action_llm_on.triggered.connect(
-            lambda checked: self.set_llm_enabled(bool(checked))
-        )
-        menu.addAction(action_llm_on)
 
         action_llm_debug = QAction("给 LLM 发一句话…（调试）", menu)
         action_llm_debug.triggered.connect(self.debug_send_to_llm)
@@ -834,15 +802,6 @@ class PetWindow(PetCanvas):
         menu.addAction(action_open_data)
         menu.addSeparator()
 
-        action_dialogue = QAction("对话", menu)
-        action_dialogue.setCheckable(True)
-        action_dialogue.setChecked(bool(self.dialogue_enabled))
-        action_dialogue.triggered.connect(
-            lambda checked: self.set_dialogue_enabled(bool(checked))
-        )
-        menu.addAction(action_dialogue)
-
-        menu.addSeparator()
         action_quit = QAction("退出", menu)
         action_quit.triggered.connect(self.close)
         menu.addAction(action_quit)

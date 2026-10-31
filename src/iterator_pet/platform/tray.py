@@ -135,7 +135,7 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
         )
         spark_menu.addAction(action_rate)
 
-    character_menu = menu.addMenu("角色")
+    character_menu = menu.addMenu("当前角色")
     current_character = getattr(window, "character", "pebbles")
     # 现扫注册表：玩家可能刚在工作室里新建/删掉一个角色（v0.2.0）
     for key, label in window.character_list():
@@ -151,19 +151,9 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
     action_workshop.triggered.connect(window.open_workshop)
     menu.addAction(action_workshop)
 
-    action_edit_lines = QAction("自定义对话", menu)
-    action_edit_lines.triggered.connect(window.open_dialogue_editor)
-    menu.addAction(action_edit_lines)
-
     action_llm = QAction("大语言模型…", menu)
     action_llm.triggered.connect(window.open_llm_settings)
     menu.addAction(action_llm)
-
-    action_llm_on = QAction("使用大语言模型", menu)
-    action_llm_on.setCheckable(True)
-    action_llm_on.setChecked(bool(getattr(window.llm.config, "enabled", True)))
-    action_llm_on.triggered.connect(lambda checked: window.set_llm_enabled(bool(checked)))
-    menu.addAction(action_llm_on)
 
     action_llm_debug = QAction("给 LLM 发一句话…（调试）", menu)
     action_llm_debug.triggered.connect(window.debug_send_to_llm)
@@ -174,15 +164,6 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
     menu.addAction(action_open_data)
     menu.addSeparator()
 
-    action_dialogue = QAction("对话", menu)
-    action_dialogue.setCheckable(True)
-    action_dialogue.setChecked(bool(getattr(window.config, "dialogue_enabled", True)))
-    action_dialogue.triggered.connect(
-        lambda checked: window.set_dialogue_enabled(bool(checked))
-    )
-    menu.addAction(action_dialogue)
-
-    menu.addSeparator()
     action_quit = QAction("退出", menu)
     action_quit.triggered.connect(window.close)
     menu.addAction(action_quit)

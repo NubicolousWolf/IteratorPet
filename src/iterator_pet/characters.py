@@ -3,7 +3,7 @@
 v0.1.9 之前"角色"是两张写死在代码里的常量（``appearance.CHARACTERS``），
 从 v0.2.0 起一个角色 = ``characters/<key>.json`` 一张卡 + 卡内
 ``extensions.rainworld.appearance`` 的外观覆盖层。这个模块是**唯一的角色清单来源**：
-托盘的「角色」菜单、右键菜单、工作室顶部的下拉框、自定义对话编辑器，全都读它，
+托盘的「当前角色」菜单、右键菜单、工坊顶部的下拉框、工坊的「本地对话」页，全都读它，
 不许再各写一份 ``(("pebbles", "五块卵石"), ...)``。
 
 为什么放在顶层而不在 ``simulation/`` 下（计划里原本写的是 ``simulation/characters.py``）：

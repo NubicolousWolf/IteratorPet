@@ -2,7 +2,7 @@
 
     ┌ 迭代器自定义 ───────────────────────────────────────────────────────┐
     │ 角色 [ 五块卵石 (pebbles · 内置) ▾ ] [新建…][复制…][删除][设为当前角色]│
-    │ ┌ 人偶外观 │ 角色卡 │ 世界书 ┐                                      │
+    │ ┌ 人偶外观 │ 本地对话 │ 角色卡 │ 世界书 ┐                          │
     │ │                                                              │   │
     │ │  (当前标签页)                                                │   │
     │ └──────────────────────────────────────────────────────────────┘   │
@@ -44,6 +44,7 @@ from .. import characters
 from ..llm import worldbook as llm_worldbook
 from ..simulation import appearance as ap
 from .card_tab import CardTab
+from .dialogue_tab import DialogueTab
 from .puppet_tab import PuppetTab
 from .worldbook_tab import WorldbookTab
 
@@ -118,12 +119,23 @@ class _CharacterDialog(QDialog):
 class Workshop(QDialog):
     def __init__(self, book: llm_worldbook.Worldbook | None = None,
                  folder: Path | str | None = None, on_saved=None, config=None,
-                 current: str | None = None, on_activate=None):
+                 current: str | None = None, on_activate=None,
+                 lines=None, dialogue_enabled: bool = True, on_dialogue_enabled=None):
         super().__init__(None)
         self.folder = Path(folder) if folder is not None else None
         self.on_saved = on_saved
         self.on_activate = on_activate
+        self.on_dialogue_enabled = on_dialogue_enabled
+        self.dialogue_enabled = bool(dialogue_enabled)
         self.config = config
+        # 台词池：窗口层把仿真的那份传进来（它带热重载状态）；单独构造工坊时兜底一份。
+        if lines is not None:
+            self.lines = lines
+        else:
+            from ..simulation.lines import Lines, default_path
+
+            self.lines = Lines(path=(self.folder / "lines.json") if self.folder
+                               else default_path())
         self._desktop = current or "pebbles"     # 桌面正在跑哪一位（删角色时要跟着切）
         self.book = book or llm_worldbook.Worldbook(
             llm_worldbook.resolve_path(self._desktop, self.folder)
@@ -163,16 +175,23 @@ class Workshop(QDialog):
 
         self.tabs = QTabWidget()
         self.puppet_tab = PuppetTab(self.folder, config=self.config)
+        # 顺序：看起来什么样 → 说什么 → 她是谁 → 她知道什么（由外往里）
+        self.dialogue_tab = DialogueTab(
+            self.lines, on_enabled=self._on_dialogue_enabled,
+            enabled=self.dialogue_enabled,
+        )
         self.card_tab = CardTab(self.folder)
         self.worldbook_tab = WorldbookTab(
             self.book, folder=self.folder, character=self._desktop
         )
         self.tabs.addTab(self.puppet_tab, "人偶外观")
+        self.tabs.addTab(self.dialogue_tab, "本地对话")
         self.tabs.addTab(self.card_tab, "角色卡")
         self.tabs.addTab(self.worldbook_tab, "世界书")
         outer.addWidget(self.tabs, 1)
 
-        for tab in (self.puppet_tab, self.card_tab, self.worldbook_tab):
+        for tab in (self.puppet_tab, self.dialogue_tab, self.card_tab,
+                    self.worldbook_tab):
             tab.changed.connect(self._on_changed)
 
         bottom = QHBoxLayout()
@@ -191,6 +210,12 @@ class Workshop(QDialog):
         self.copy_button.clicked.connect(self.copy_character)
         self.delete_button.clicked.connect(self.delete_character)
         self.activate_button.clicked.connect(self.activate_character)
+
+    def _on_dialogue_enabled(self, enabled: bool) -> None:
+        """「不接入LLM时，启用本地对话」：立刻交给窗口层（写 config + 生效）。"""
+        self.dialogue_enabled = bool(enabled)
+        if callable(self.on_dialogue_enabled):
+            self.on_dialogue_enabled(bool(enabled))
 
     # -- 角色列表 -----------------------------------------------------------
     def _reload_cards(self, keep: str | None = None) -> None:
@@ -256,6 +281,7 @@ class Workshop(QDialog):
         if error or ref is None:
             return "", error or "原因未知"
         self._reload_cards(keep=ref.key)
+        self.dialogue_tab.refresh(keep=ref.key)
         return ref.key, ""
 
     def new_character(self) -> None:
@@ -276,6 +302,7 @@ class Workshop(QDialog):
         if error or ref is None:
             return "", error or "原因未知"
         self._reload_cards(keep=ref.key)
+        self.dialogue_tab.refresh(keep=ref.key)
         return ref.key, ""
 
     def copy_character(self) -> None:
@@ -307,6 +334,7 @@ class Workshop(QDialog):
         if key == self._desktop:
             self.activate_character(characters.BUILTIN_KEYS[0], silent=True)
         self._reload_cards(keep=self._desktop)
+        self.dialogue_tab.refresh(keep=self._desktop)
         return ""
 
     def delete_character(self) -> None:
@@ -349,7 +377,9 @@ class Workshop(QDialog):
     # -- 保存 ---------------------------------------------------------------
     def _any_dirty(self) -> bool:
         return any(
-            tab.is_dirty() for tab in (self.puppet_tab, self.card_tab, self.worldbook_tab)
+            tab.is_dirty()
+            for tab in (self.puppet_tab, self.dialogue_tab, self.card_tab,
+                        self.worldbook_tab)
         )
 
     def _on_changed(self) -> None:
@@ -364,8 +394,8 @@ class Workshop(QDialog):
         """
         errors: list[str] = []
         touched = 0
-        for name, tab in (("人偶外观", self.puppet_tab), ("角色卡", self.card_tab),
-                          ("世界书", self.worldbook_tab)):
+        for name, tab in (("人偶外观", self.puppet_tab), ("本地对话", self.dialogue_tab),
+                          ("角色卡", self.card_tab), ("世界书", self.worldbook_tab)):
             if not tab.is_dirty():
                 continue
             touched += 1
@@ -398,11 +428,14 @@ class Workshop(QDialog):
 
 
 def show_workshop(book=None, folder=None, on_saved=None, config=None,
-                  current: str | None = None, on_activate=None) -> Workshop:
+                  current: str | None = None, on_activate=None, lines=None,
+                  dialogue_enabled: bool = True, on_dialogue_enabled=None) -> Workshop:
     """打开（或复用）一个工作室窗口；引用留在模块里，防止被 Python 回收。"""
     global _OPEN
     workshop = Workshop(book=book, folder=folder, on_saved=on_saved, config=config,
-                        current=current, on_activate=on_activate)
+                        current=current, on_activate=on_activate, lines=lines,
+                        dialogue_enabled=dialogue_enabled,
+                        on_dialogue_enabled=on_dialogue_enabled)
     _OPEN.append(workshop)
 
     def _forget(*_args) -> None:
