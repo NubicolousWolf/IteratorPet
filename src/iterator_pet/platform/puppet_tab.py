@@ -73,7 +73,7 @@ ANTENNA_FIELDS = (
 #: 盖掉大半，画什么也看不出原样。留一块画不动的画板比没有更糟。
 BOARDS = (
     ("headpiece", "头顶部件 24×20", DEFAULT_W, DEFAULT_H, 11, "head"),
-    ("antenna", "天线 8×24（左右镜像）", 8, 24, 9, "antenna"),
+    ("antenna", "天线 12×29（含耳麦，左右镜像）", 12, 29, 9, "antenna"),
 )
 
 #: 每个画板该有多大。**控件尺寸、画布数据尺寸、参考线都从这一个表来**——
@@ -309,22 +309,24 @@ class PixelCanvas(QWidget):
                            self.cell, self.cell * 2.0)
                 )
         elif self.reference == "antenna":
-            # **原版触角的外轮廓**：3 px 宽 × 11.2 px 长（`renderer.py` 里那行
-            # `drawPixmap(QRectF(-1.5, 0.0, 3.0, 11.2))`），1 格 = 0.5 px → 6 格 × 22.4 格。
-            # 画板约定：**底边 = 根部（耳麦）、顶边 = 尖**，与渲染时的翻转一致。
+            # **整条侧边部件的外轮廓**：耳麦外圈（5.0 px ⌀）+ 内圈（×0.8）+ 触角
+            # （3.0 × 11.2 px）。1 仿真 px = 2 格，所以半径/宽度都 ×2。
+            # 朝向与屏幕一致：**触角尖在上、耳麦在底**（圆心行由 antenna_pod_center_row 给）。
+            cell = self.cell
+            cx = self.art.w * 0.5 * cell
+            cy = ap.antenna_pod_center_row(self.art.h) * cell
+            painter.setPen(QPen(QColor(255, 255, 255, 95), 1, Qt.PenStyle.DashLine))
+            painter.drawEllipse(QPointF(cx, cy),
+                                ap.ANTENNA_POD_DIAMETER_PX * cell,
+                                ap.ANTENNA_POD_DIAMETER_PX * cell)
+            painter.setPen(QPen(QColor(255, 255, 255, 70), 1, Qt.PenStyle.DotLine))
+            painter.drawEllipse(QPointF(cx, cy),
+                                ap.ANTENNA_POD_DIAMETER_PX * 0.8 * cell,
+                                ap.ANTENNA_POD_DIAMETER_PX * 0.8 * cell)
             painter.setPen(QPen(QColor(255, 200, 120, 150), 1, Qt.PenStyle.DashLine))
-            bar_w = 3.0 * 2.0
-            bar_h = 11.2 * 2.0
-            x0 = (self.art.w - bar_w) * 0.5
-            y0 = self.art.h - bar_h
-            painter.drawRect(
-                QRectF(x0 * self.cell, y0 * self.cell, bar_w * self.cell, bar_h * self.cell)
-            )
-            painter.setPen(QPen(QColor(255, 255, 255, 90), 1, Qt.PenStyle.DashLine))
-            painter.drawEllipse(
-                QPointF(self.art.w * 0.5 * self.cell, self.art.h * self.cell),
-                5.0 * self.cell, 5.0 * self.cell,
-            )
+            stalk_w = ap.ANTENNA_STALK_WIDTH_PX * 2.0 * cell
+            stalk_h = ap.ANTENNA_STALK_LENGTH_PX * 2.0 * cell
+            painter.drawRect(QRectF(cx - stalk_w * 0.5, cy - stalk_h, stalk_w, stalk_h))
         else:
             painter.setPen(QPen(QColor(255, 255, 255, 70), 1, Qt.PenStyle.DashLine))
             painter.drawRect(self.rect().adjusted(0, 0, -1, -1))

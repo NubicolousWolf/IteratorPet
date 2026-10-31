@@ -31,6 +31,7 @@ from PySide6.QtGui import (
 )
 
 from ..simulation import constants as C
+from ..simulation.appearance import antenna_pod_center_row
 from ..simulation.state import RenderState
 from .sprites import tinted
 
@@ -962,9 +963,36 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
                cy - axis[1] * 40.0 - state.look_dir[1] * 10.0)
         aim = atan2(state.body0[1] - tip[1], state.body0[0] - tip[0]) * 180.0 / pi + 90.0
 
-        # 玩家画的侧边部件：一张图左右镜像（2026-10-31）。画在"触角根部"的局部坐标系里
-        # —— 原点在耳麦中心、+y 顺着触角朝外。**耳麦本身仍由源码那两个圆画**
-        # （颜色可以改），玩家画板只管伸出去的那根。
+        # 玩家画的侧边部件：**整条**（耳麦 + 内圈 + 触角），一张图左右镜像。
+        # **逐像素摆位置，不做整图缩放/翻转**：这块已经被"上下颠倒"坑了三次
+        # （2026-10-31 用户报了两次），宁可用 348 次 fillRect 换掉一整类朝向 bug。
+        # 画板约定：**底部那行是耳麦圆心、顶部是触角尖**（与屏幕朝向一致）。
+        art = ap.antenna_art
+        if art is not None and not art.is_empty():
+            cell = float(ap.antenna_scale or 0.5)
+            pod_row = antenna_pod_center_row(art.h)     # 圆心在第几行（从顶部数）
+            half = art.w * 0.5
+            painter.save()
+            painter.translate(QPointF(cx, cy))
+            painter.rotate(aim)
+            if sign < 0:
+                painter.scale(-1.0, 1.0)                # 左右镜像**只管自定义图**
+            painter.setPen(Qt.PenStyle.NoPen)
+            for row in range(art.h):
+                # 行号越大越靠下 = 越靠内；局部 +y 朝外，所以取负号
+                oy = (pod_row - row) * cell
+                line = art.pixels[row]
+                for col in range(art.w):
+                    colour = line[col]
+                    if colour is None:
+                        continue
+                    painter.fillRect(
+                        QRectF((col - half) * cell, oy, cell, cell), QColor(colour)
+                    )
+            painter.restore()
+            continue                       # 画了自己的就不再叠源码那两个圆和杆
+
+        # 源码分支：两个圆（外圈 + 内圈）+ 一根触角
         for part, scale in ((0, 1.0), (1, 0.8)):
             pod = tinted("Circle20", ap.pod_colour if part == 0 else ap.pod_rim_colour)
             w = pod_w * scale
@@ -974,21 +1002,10 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
         painter.save()
         painter.translate(QPointF(cx, cy))
         painter.rotate(aim)
-        art = ap.antenna_art
-        if art is not None and not art.is_empty():
-            cell = float(ap.antenna_scale or 0.5)
-            width, height = art.w * cell, art.h * cell
-            painter.scale(-1.0 if sign < 0 else 1.0, 1.0)   # 左右镜像**只管自定义图**
-            # 画板约定：**底边 = 耳麦（根部）、顶边 = 尖**，和玩家在画板上看到的一致。
-            # 局部 +y 是从根部朝外，所以这里要再翻一次 y（2026-10-31 用户报"上下反了"）。
-            painter.scale(1.0, -1.0)
-            painter.drawPixmap(QRectF(-width * 0.5, -height, width, height),
-                               _art_pixmap(art), QRectF(0, 0, art.w, art.h))
-        else:
-            # PhoneSprite(side, 2): LizardScaleA1 aimed from the body outward
-            # （原版两次都画同一张，**不镜像** —— 镜像过会让 AA 边缘差 17/255）
-            antenna = tinted("LizardScaleA1", ap.antenna_colour)
-            painter.drawPixmap(QRectF(-1.5, 0.0, 3.0, 11.2), antenna, QRectF(antenna.rect()))
+        # PhoneSprite(side, 2): LizardScaleA1 aimed from the body outward
+        # （原版两次都画同一张，**不镜像** —— 镜像过会让 AA 边缘差 17/255）
+        antenna = tinted("LizardScaleA1", ap.antenna_colour)
+        painter.drawPixmap(QRectF(-1.5, 0.0, 3.0, 11.2), antenna, QRectF(antenna.rect()))
         painter.restore()
 
     # HeadSprite: Circle20 at (rad/9, rad/11), rotated with the body axis

@@ -132,6 +132,38 @@ CHARACTERS = {"pebbles": PEBBLES, "past_moon": PAST_MOON}
 #: 仪式是否杀鼠标）来自基底 —— 见 docs/PLAN-custom-iterator.md §1。
 BASE_TEMPLATES = {"pebbles": "五块卵石", "past_moon": "仰望皓月"}
 
+#: 天线画板的几何（**整条侧边部件**：耳麦 + 内圈 + 触角，不只是那根杆）。
+#:
+#: 数值都来自 `renderer.py::draw_puppet_head` 里的字面量：
+#: 耳麦直径 `Lerp(3.5, 5.0, |look.x|)` → 最大 5.0 px，内圈 ×0.8，触角 `3.0 × 11.2` px。
+#: 画板 1 格 = ``antenna_scale``（默认 0.5 仿真 px），所以：
+#:   * 耳麦圆心在第 ``ANTENNA_POD_ROWS`` 格（= 2.75 px / 0.5），上半圆在它上面；
+#:   * 触角从圆心朝外 11.2 px = 22.4 格。
+#: 之前画板只按"3 × 11.2 的触角"定尺寸（8×24），于是**耳麦和内圈整个在画布外面**，
+#: 参考线只能露出半个圆 —— 用户 2026-10-31 报的"下半部分截断"就是这个。
+ANTENNA_POD_ROWS = 5.5
+ANTENNA_POD_DIAMETER_PX = 5.0
+ANTENNA_STALK_WIDTH_PX = 3.0
+ANTENNA_STALK_LENGTH_PX = 11.2
+
+
+def antenna_pod_center_row(height: int) -> float:
+    """画板上**耳麦圆心**在第几行（**从底部数**，画板底部是耳麦、顶部是触角尖）。
+
+    为什么从底部数：屏幕上天线是朝**外上方**伸的，画板要跟屏幕一致 —— 尖在顶、耳麦在底。
+    前两版把耳麦放在顶部，玩家在画板上画的图形到屏幕上就整体颠倒（用户 2026-10-31 两次报）。
+    """
+    return height - 1 - ANTENNA_POD_ROWS
+
+
+def antenna_board_size(cell: float = 0.5) -> tuple[int, int]:
+    """整条侧边部件在该格子尺寸下要占多少格（+ 各 1 格余量）。"""
+    cell = max(0.05, float(cell))
+    width = int(ANTENNA_POD_DIAMETER_PX / cell) + 2
+    height = int((ANTENNA_POD_ROWS + ANTENNA_STALK_LENGTH_PX / cell)) + 2
+    return max(4, width), max(6, height)
+
+
 HEADPIECE_MODES = {
     "none": "无（跟随基底：源码有几个部件就画几个）",
     "pixel": "自定义像素画",

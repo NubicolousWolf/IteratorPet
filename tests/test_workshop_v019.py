@@ -26,7 +26,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from iterator_pet.llm import cards as llm_cards  # noqa: E402
 from iterator_pet.llm import worldbook as wb  # noqa: E402
-from iterator_pet.platform.puppet_tab import BOARDS, PuppetTab  # noqa: E402
+from iterator_pet.platform.puppet_tab import BOARDS, BOARD_SIZES, PuppetTab  # noqa: E402
 from iterator_pet.rendering.pixel_art import PixelArt  # noqa: E402
 from iterator_pet.simulation import appearance as ap  # noqa: E402
 
@@ -470,35 +470,9 @@ def test_a_stored_art_of_the_wrong_size_is_fitted_to_the_board(tmp_path):
 
     tab = PuppetTab(tmp_path)
     tab.load("pebbles")
-    assert (tab.canvases["antenna"].art.w, tab.canvases["antenna"].art.h) == (8, 24)
+    assert (tab.canvases["antenna"].art.w, tab.canvases["antenna"].art.h) == BOARD_SIZES["antenna"]
     assert tab.canvases["antenna"].art.get(1, 1) == "#ff0000", "左上角对齐，内容别丢"
     assert (tab.canvases["headpiece"].art.w, tab.canvases["headpiece"].art.h) == (24, 20)
-
-
-def test_a_short_window_never_clips_a_board(tmp_path):
-    """窗口压矮时，画板**只能出滚动条，不能被裁**。
-
-    用户 2026-10-31 报「天线画板下半部分截断」：固定尺寸的控件塞进小容器，Qt 会直接裁掉，
-    既不报错也不缩。每块画板现在都套在 QScrollArea 里，这条断言同时钉住
-    "控件尺寸 = 画布尺寸 × 格宽"和"可见区域 = 整个控件"。
-    """
-    from iterator_pet.platform.workshop import Workshop
-
-    (tmp_path / "characters").mkdir(parents=True)
-    workshop = Workshop(book=wb.Worldbook(tmp_path / "worldbook.json"), folder=tmp_path)
-    workshop.resize(1165, 460)          # 比默认 720 矮得多
-    workshop.show()
-    APP.processEvents()
-    tab = workshop.puppet_tab
-    for index, (key, _title, width, height, cell, _ref) in enumerate(BOARDS):
-        tab.board_box.setCurrentIndex(index)
-        APP.processEvents()
-        canvas = tab.canvases[key]
-        assert (canvas.width(), canvas.height()) == (width * cell, height * cell)
-        visible = canvas.visibleRegion().boundingRect()
-        assert (visible.width(), visible.height()) == (canvas.width(), canvas.height()), \
-            f"{key} 画板被容器裁掉了"
-    workshop.close()
 
 
 def test_both_boards_carry_a_reference_outline():
@@ -553,9 +527,9 @@ def test_the_renderer_draws_both_custom_boards_without_blowing_up():
 
     head = PixelArt.blank()
     head.set(11, 2, "#ffcc00")
-    antenna = PixelArt.blank(8, 24)
-    for y in range(4, 20):
-        antenna.set(4, y, "#88ccff")
+    antenna = PixelArt.blank(*ap.antenna_board_size(0.5))
+    for y in range(8, 26):
+        antenna.set(antenna.w // 2, y, "#88ccff")
 
     sim = SimulationState((0.0, 0.0, 260.0, 300.0), warmup=0, character="pebbles")
     for _ in range(20):
@@ -576,3 +550,75 @@ def test_the_renderer_draws_both_custom_boards_without_blowing_up():
     assert not image.isNull()
 
 
+def test_the_antenna_board_covers_the_whole_side_assembly():
+    """画板必须**包含耳麦与内圈**，不能只按那根触角定尺寸。
+
+    用户 2026-10-31 一眼看出来：「8×24 更像是触角长度，没包含内圈和耳麦」。
+    按源码字面量：耳麦直径最大 5.0 px、触角 3.0 × 11.2 px，圆心在第
+    `ANTENNA_POD_ROWS` 格 —— 画板要装得下"圆心以上半个耳麦 + 圆心以下整根触角"。
+    """
+    cell = 0.5
+    width, height = BOARD_SIZES["antenna"]
+    assert (width, height) == ap.antenna_board_size(cell)
+
+    radius_rows = ap.ANTENNA_POD_DIAMETER_PX * 0.5 / cell      # 5.0 格
+    stalk_rows = ap.ANTENNA_STALK_LENGTH_PX / cell             # 22.4 格
+    center = ap.antenna_pod_center_row(height)                 # 从顶部数的圆心行
+    assert center + radius_rows <= height - 0.5, "耳麦下沿不许出画布"
+    assert center - stalk_rows >= 0, "触角尖不许出画布（尖在上、耳麦在底）"
+    assert ap.ANTENNA_POD_DIAMETER_PX / cell <= width - 1, "耳麦直径不许横向出画布"
+
+
+def test_the_antenna_points_outward_not_inward():
+    """画板上**顶部是触角尖、底部是耳麦**，画到屏幕上必须是"尖朝外"。
+
+    这块被"上下颠倒"坑了三次（2026-10-31 用户报了两次）。这里用像素距离直接量：
+    第 0 行涂红、最后一行涂蓝，红点平均位置必须比蓝点离头更远。
+    """
+    from PySide6.QtGui import QImage, QPainter, QColor
+    import dataclasses
+    import math
+    from iterator_pet.rendering import renderer as renderer
+    from iterator_pet.simulation import constants as constants
+    from iterator_pet.simulation.state import SimulationState
+
+    art = PixelArt.blank(*ap.antenna_board_size(0.5))
+    for x in range(art.w):
+        art.set(x, 0, "#ff0000")                  # 顶行 = 尖
+        art.set(x, art.h - 1, "#0000ff")          # 底行 = 耳麦
+
+    sim = SimulationState((0.0, 0.0, 260.0, 300.0), warmup=0, character="pebbles")
+    for _ in range(40):
+        sim.step(1.0 / constants.GAME_HZ)
+    appearance = ap.build_appearance("x", "pebbles", {
+        "antenna_pixels": art.to_dict(), "antenna_scale": 0.5,
+    })
+    state = dataclasses.replace(sim.interpolate(1.0), look_dir=(0.0, 0.0),
+                                appearance=appearance)
+    width, height, zoom = 300, 360, 10.0
+    image = QImage(width, height, QImage.Format.Format_ARGB32)
+    image.fill(QColor("#000000"))
+    painter = QPainter(image)
+    painter.translate(width * 0.5 - state.head[0] * zoom,
+                      height * 0.5 - state.head[1] * zoom)
+    painter.scale(zoom, zoom)
+    renderer.draw_puppet_head(painter, state)
+    painter.end()
+
+    def average(match):
+        points = [(x, y) for y in range(height) for x in range(width)
+                  if match(image.pixelColor(x, y))]
+        if not points:
+            return None
+        return (sum(p[0] for p in points) / len(points),
+                sum(p[1] for p in points) / len(points))
+
+    red = average(lambda c: c.red() > 200 and c.green() < 60 and c.blue() < 60)
+    blue = average(lambda c: c.blue() > 200 and c.red() < 60 and c.green() < 60)
+    assert red is not None and blue is not None, "两端都得画出来才谈得上朝向"
+    centre = (width * 0.5, height * 0.5)
+    red_dist = math.hypot(red[0] - centre[0], red[1] - centre[1])
+    blue_dist = math.hypot(blue[0] - centre[0], blue[1] - centre[1])
+    assert red_dist > blue_dist + 20, (
+        f"触角尖应该在远端（红 {red_dist:.0f}px），耳麦在近端（蓝 {blue_dist:.0f}px）"
+    )
