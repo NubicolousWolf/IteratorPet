@@ -87,6 +87,10 @@ class PetWindow(PetCanvas):
         self._character = characters.resolve_key(getattr(config, "character", "pebbles"))
         config.character = self._character
         self.simulation.appearance = characters.appearance_of(self._character)
+        # 电光档位是"从配置里读"的状态。main.py 也会调一次，但 `create_window`
+        # 那条路（工具/测试）不经过 main.py —— 窗口自己接上，才不会出现
+        # "启动后明明是 computing 却按节能跑"这种只有换尺寸才被发现的偏差。
+        self.simulation.halo.set_spark_rate(getattr(config, "spark_rate", "eco"))
         # LLM 路由器交给仿真持有（仿真每 tick 用；这里只负责造出来和换角色）。
         # 没 key / 没模型时 `router.enabled` 为假，仿真会走本地台词池，一行不差。
         from ..llm.route import LLMRouter
@@ -311,8 +315,9 @@ class PetWindow(PetCanvas):
         geo = self.geometry()
         bounds = (0.0, 0.0, float(geo.width()) / zoom, float(geo.height()) / zoom)
         self.simulation.end_drag(fling=False)   # 拖拽中切尺寸：先结束旧会话（不甩）
-        carried_temper = self.simulation.temper.value
-        seed = getattr(self.simulation, "seed", 1234)
+        old = self.simulation
+        carried_temper = old.temper.value
+        seed = getattr(old, "seed", 1234)
         # **不能带预热同步构造**：构造里的 320 tick 预热随腔室面积膨胀得非常厉害
         # （1138x608 约 1.6 s，40% 档的 2845x1520 要 11.7 s —— 这就是"切尺寸卡一下"）。
         # warmup=0 只要 0.4 ms，之后让 40 TPS 的固定步长循环自然把关节/缆线跑稳，
@@ -322,6 +327,9 @@ class PetWindow(PetCanvas):
         self.simulation.scale = zoom
         # 心情跨尺寸保留（否则换一下大小就"消气"），仪式状态机复位（不许留半个仪式）
         self.simulation.temper.value = carried_temper
+        # 其余"不属于腔室"的会话状态一起搬：LLM 路由器 / 卡里的外观 / 电光档位 / 台词表 /
+        # 对话开关。少搬一个就是一个玩家可见的 bug（用户 2026-10-31 报的两个都在这里）。
+        self.simulation.adopt_session_from(old)
         cursorfx.release()
         self._last = time.perf_counter()
         self.update()

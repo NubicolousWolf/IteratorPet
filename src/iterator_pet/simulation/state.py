@@ -283,6 +283,35 @@ class SimulationState:
         self.frame_pos = self.rail.project(self.creature.chunk0)
         self._cur = self._compose()
 
+    def adopt_session_from(self, other: "SimulationState") -> None:
+        """把**不属于腔室**的会话状态从另一个仿真搬过来（切尺寸重建时用）。
+
+        为什么要有这个函数：切尺寸 = 换腔室 = 整个重建 ``SimulationState``
+        （rail / 缆线 / 光环锚点全在仿真坐标里，就地缩放会留下旧坐标）。
+        但下面这些东西**不是腔室的函数**，重建就会掉，而且每个掉法都是一个玩家可见的 bug：
+
+        * ``llm`` —— 路由器是窗口层注入的，构造器默认 ``None``。丢了的表现是
+          "换过尺寸以后她再也不接大模型"，调试入口直接弹「这个窗口没有接 LLM」，
+          本地台词池顶上来（自定义角色没有台词组 → 只会说「……」）。
+        * ``appearance`` —— 构造器只认内置两位（``appearance_for`` 读的是常量表）。
+          工坊里调过色、画过头饰的角色，一切尺寸就变回源码默认色；
+          更糟的是 ``appearance.key`` 也退回 ``pebbles``，连台词池与角色卡都跟着串。
+        * ``halo.spark_rate`` —— 电光频率档位（off / eco / computing），丢了就是
+          "切完尺寸电光自己变回节能"。
+        * ``lines`` —— 台词表记着"上一句说过什么"（不连说同一句），重造就重复了。
+        * ``dialogue_enabled`` / ``last_spoken`` —— 托盘里的对话开关；以及喂给 LLM
+          当情境的"她刚才说过什么"。
+
+        **不要**把 ``dialogue`` / ``kill`` / ``temper`` 一起搬：那些带着旧腔室的
+        锚点坐标与相位，属于"这一刻的仪式"，重建时本来就该复位（心情值由调用方单独搬）。
+        """
+        self.llm = other.llm
+        self.appearance = other.appearance
+        self.lines = other.lines
+        self.dialogue_enabled = other.dialogue_enabled
+        self.last_spoken = other.last_spoken
+        self.halo.spark_rate = other.halo.spark_rate
+
     @property
     def bounds(self) -> tuple[float, float, float, float]:
         """The chamber in SIMULATION pixels.

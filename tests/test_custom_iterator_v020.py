@@ -418,3 +418,89 @@ def test_forking_the_global_worldbook_gives_the_character_her_own_copy(tmp_path)
     assert own.read_text("utf-8") == text, "复制不是「读进来再写出去」，排版也得一样"
     assert workshop.worldbook_tab.book.path == own
     workshop.close()
+
+# ------------------------------------------------ 切尺寸不丢会话状态 ----
+def test_switching_size_keeps_llm_appearance_sparks_and_lines():
+    """切尺寸会整个重建仿真：**不属于腔室**的状态必须一起搬。
+
+    用户 2026-10-31 报的两个 bug 是同一个根因——`apply_scale()` 重建
+    `SimulationState` 时只搬了 `temper.value`：
+
+    * 电光档位掉回默认 `eco`（"切完尺寸电光自己变回节能"）；
+    * `simulation.llm` 变回 `None`（"自定义角色接不上 LLM，只会说……；
+      调试入口弹「这个窗口没有接 LLM」"）；
+    * 以及 v0.2.0 自己带来的第三份：卡里的外观掉回源码模板，
+      连 `appearance.key` 都退回 `pebbles`（台词池与角色卡跟着串）。
+
+    这条测试必须能真红：把 `adopt_session_from` 里任一行删掉，它都会失败。
+    """
+    _app()
+    from iterator_pet.config import Config
+    from iterator_pet.platform.pet_window import PetWindow
+    from iterator_pet.simulation.state import SimulationState
+
+    config = Config()
+    config.scale = 1.5
+    config.character = "my_sun"
+    old = SimulationState((0.0, 0.0, 1136.0, 608.0), seed=7, warmup=0,
+                          character="my_sun")
+    router = object()          # 真的 LLMRouter 要碰网络/文件，这里只要"是不是同一个"
+    from dataclasses import replace
+
+    custom = replace(ap.PEBBLES, key="my_sun", skin=(1, 2, 3))
+    old.llm = router
+    old.appearance = custom
+    old.dialogue_enabled = False
+    old.last_spoken = "上一次说的话"
+    old.halo.set_spark_rate("computing")
+    lines = old.lines
+    computing = old.halo.spark_rate
+
+    class _Rect:
+        @staticmethod
+        def width():
+            return 1707
+
+        @staticmethod
+        def height():
+            return 912
+
+    class _Window:
+        """只借 `apply_scale` 用到的那几个属性，不造真窗口（整屏透明窗口在离屏里不可靠）。"""
+
+    window = _Window()
+    window.simulation = old
+    window.config = config
+    window.character = "my_sun"
+    window.scale = 1.5
+    window._last = 0.0
+    window.geometry = lambda: _Rect()
+    window.update = lambda: None
+
+    PetWindow.apply_scale(window)
+    new = window.simulation
+
+    assert new is not old, "切尺寸就是换腔室 = 重建一个新仿真"
+    assert new.llm is router, "路由器丢了 → 只会说…… / 「这个窗口没有接 LLM」"
+    assert new.appearance.key == "my_sun", "外观丢了 → key 退回 pebbles，台词池跟着串"
+    assert new.appearance.skin == (1, 2, 3), "工坊里调过的颜色必须还在"
+    assert new.dialogue_enabled is False, "托盘里的对话开关不许被重新打开"
+    assert new.last_spoken == "上一次说的话", "喂给 LLM 的上一句不许清空"
+    assert new.lines is lines, "台词表要带着（里面记着上一句说过什么）"
+    assert new.halo.spark_rate == computing, "电光档位丢了 → 自己变回节能"
+
+
+def test_adopt_session_does_not_carry_the_ritual_in_flight():
+    """仪式/对话是"这一刻、这个腔室"的状态，重建时该复位，不跟着搬。"""
+    from iterator_pet.simulation.state import SimulationState
+
+    old = SimulationState((0.0, 0.0, 1136.0, 608.0), seed=3, warmup=0)
+    old.dialogue.start("测试台词")
+    old.kill.begin((100.0, 100.0), old.ticks, tremble_only=False)
+
+    new = SimulationState((0.0, 0.0, 1136.0, 608.0), seed=3, warmup=0)
+    new.adopt_session_from(old)
+
+    assert new.dialogue.text == "", "气泡属于旧腔室，重建时收起"
+    assert new.kill.phase == "idle", "不许留半个仪式"
+
