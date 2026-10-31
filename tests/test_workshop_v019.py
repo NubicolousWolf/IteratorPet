@@ -349,3 +349,134 @@ def test_puppet_tab_translates_a_stored_draft_back_into_widgets(tmp_path):
     draft = tab.collect()
     assert draft["skin"] == [10, 20, 30]
     assert draft["base_template"] == "past_moon"
+
+
+# --------------------------------------------------------------------------
+# 画笔选色（第一版漏了：画板只有一个写死的默认色）
+# --------------------------------------------------------------------------
+def test_the_brush_colour_reaches_the_canvas(tmp_path):
+    (tmp_path / "characters").mkdir(parents=True)
+    tab = PuppetTab(tmp_path)
+    tab.brush_colour.set_colour("#ff0000")
+    tab._on_brush_colour("#ff0000")
+    assert tab.current_canvas().colour == "#ff0000"
+    for canvas in tab.canvases.values():
+        assert canvas.colour == "#ff0000", "三个画板共用画笔颜色"
+
+
+def test_the_eyedropper_takes_the_colour_from_the_pixel():
+    from iterator_pet.platform.puppet_tab import PixelCanvas
+
+    canvas = PixelCanvas(None, cell=8)
+    canvas.art.set(2, 2, "#00ff88")
+    picked: list[str] = []
+    canvas.picked.connect(picked.append)
+    canvas._pick(2, 2)
+    assert canvas.colour == "#00ff88"
+    assert picked == ["#00ff88"]
+
+    canvas._pick(0, 0)                      # 空白处不该改色
+    assert canvas.colour == "#00ff88"
+
+
+def test_recent_colours_show_up_after_using_them(tmp_path):
+    (tmp_path / "characters").mkdir(parents=True)
+    tab = PuppetTab(tmp_path)
+    tab._use_colour("#123456")
+    assert "#123456" in tab._recent
+    assert tab.brush_colour.colour() == "#123456"
+
+
+# --------------------------------------------------------------------------
+# 天线与衣袍画板
+# --------------------------------------------------------------------------
+def test_antenna_and_gown_boards_round_trip_through_the_card(tmp_path):
+    (tmp_path / "characters").mkdir(parents=True)
+    tab = PuppetTab(tmp_path)
+    tab.load("pebbles")
+
+    antenna = tab.canvases["antenna"].art
+    antenna.set(1, 1, "#ff0000")
+    tab.antenna_enabled.setChecked(True)
+
+    gown = tab.canvases["gown"].art
+    gown.set(5, 5, "#00ff00")
+    tab.gown_enabled.setChecked(True)
+    tab._mark_dirty()
+
+    assert tab.save() == ""
+    stored = llm_cards.read_appearance("pebbles", folder=tmp_path)
+    assert "antenna_pixels" in stored and "gown_pixels" in stored
+
+    other = PuppetTab(tmp_path)
+    other.load("pebbles")
+    assert other.antenna_enabled.isChecked() and other.gown_enabled.isChecked()
+    assert other.canvases["antenna"].art.get(1, 1) == "#ff0000"
+    assert other.canvases["gown"].art.get(5, 5) == "#00ff00"
+
+
+def test_boards_that_are_off_do_not_get_saved(tmp_path):
+    (tmp_path / "characters").mkdir(parents=True)
+    tab = PuppetTab(tmp_path)
+    tab.load("pebbles")
+    tab.canvases["gown"].art.set(3, 3, "#ffffff")     # 画了但开关没开
+    tab._mark_dirty()
+    assert tab.save() == ""
+    stored = llm_cards.read_appearance("pebbles", folder=tmp_path)
+    assert "gown_pixels" not in stored
+
+
+def test_appearance_carries_the_antenna_and_gown_pixels():
+    antenna = PixelArt.blank(12, 24)
+    antenna.set(2, 3, "#abcdef")
+    gown = PixelArt.blank(11, 11)
+    gown.set(1, 1, "#123123")
+
+    appearance = ap.build_appearance("x", "pebbles", {
+        "antenna_pixels": antenna.to_dict(), "antenna_scale": 0.9,
+        "gown_pixels": gown.to_dict(),
+        "pod_colour": "#101010", "pod_rim_colour": "#202020",
+        "antenna_colour": "#303030",
+    })
+    assert appearance.antenna_art is not None
+    assert appearance.antenna_scale == 0.9
+    assert appearance.gown_art is not None
+    assert appearance.pod_colour == (16, 16, 16)
+    assert appearance.antenna_colour == (48, 48, 48)
+
+
+def test_the_renderer_draws_all_three_custom_boards_without_blowing_up():
+    """三个画板一起开、真的画一遍 —— 预览和桌面走的是同一批函数。"""
+    from PySide6.QtGui import QImage, QPainter, QColor
+    from iterator_pet.rendering import renderer as renderer
+    from iterator_pet.simulation import constants as constants
+    from iterator_pet.simulation.state import SimulationState
+
+    head = PixelArt.blank()
+    head.set(11, 2, "#ffcc00")
+    antenna = PixelArt.blank(12, 24)
+    for y in range(4, 20):
+        antenna.set(6, y, "#88ccff")
+    gown = PixelArt.blank(11, 11)
+    for y in range(11):
+        for x in range(11):
+            gown.set(x, y, "#3366aa" if (x + y) % 2 else "#224488")
+
+    sim = SimulationState((0.0, 0.0, 260.0, 300.0), warmup=0, character="pebbles")
+    for _ in range(20):
+        sim.step(1.0 / constants.GAME_HZ)
+    appearance = ap.build_appearance("x", "pebbles", {
+        "headpiece_mode": "pixel", "headpiece_pixels": head.to_dict(),
+        "antenna_pixels": antenna.to_dict(), "gown_pixels": gown.to_dict(),
+    })
+    import dataclasses
+
+    state = dataclasses.replace(sim.interpolate(1.0), appearance=appearance)
+    image = QImage(300, 340, QImage.Format.Format_ARGB32)
+    image.fill(QColor("#000000"))
+    painter = QPainter(image)
+    renderer.draw_gown(painter, state)
+    renderer.draw_puppet_head(painter, state)
+    painter.end()
+    assert not image.isNull()
+

@@ -60,6 +60,17 @@ class Appearance:
     # 1 格 = 多少仿真像素。24×20 的画布 × 0.5 = 12×10 仿真 px，正好盖住 11.1×9.1 的头
     # （renderer.py:974）。见 docs/PLAN-custom-iterator.md §3.5。
     headpiece_scale: float = 0.5
+    # 侧边"耳麦 + 触角"（`PhoneSprite` 两个圆 + `LizardScaleA1`）。这三个默认值就是
+    # 渲染层里原来写死的那三个深灰（设计增补，源码没有对应的颜色常数），
+    # 接通前后观感一致；从 2026-10-31 起玩家可以在工作室里改。
+    pod_colour: tuple[int, int, int] = (58, 52, 56)
+    pod_rim_colour: tuple[int, int, int] = (32, 28, 32)
+    antenna_colour: tuple[int, int, int] = (40, 34, 38)
+    # 玩家画的侧边部件（**左右镜像**同一张图）。None = 用源码那两个圆 + 一根触角。
+    antenna_art: PixelArt | None = None
+    antenna_scale: float = 0.5
+    # 玩家画的袍子纹理：按袍身网格逐格采样（11×11）。None = 用源码那条 HSL 渐变。
+    gown_art: PixelArt | None = None
 
 
 def _moon_gown(f: float) -> tuple[int, int, int]:
@@ -215,6 +226,22 @@ def build_appearance(key: str, base: str = "pebbles", override: dict | None = No
     scale = override.get("headpiece_scale")
     if isinstance(scale, (int, float)) and not isinstance(scale, bool):
         patch["headpiece_scale"] = max(0.2, min(2.0, float(scale)))
+
+    for field in ("pod_colour", "pod_rim_colour", "antenna_colour"):
+        colour = _rgb(override.get(field))
+        if colour is not None:
+            patch[field] = colour
+
+    antenna = PixelArt.from_dict(override.get("antenna_pixels"))
+    if antenna is not None and not antenna.is_empty():
+        patch["antenna_art"] = antenna
+    antenna_scale = override.get("antenna_scale")
+    if isinstance(antenna_scale, (int, float)) and not isinstance(antenna_scale, bool):
+        patch["antenna_scale"] = max(0.2, min(2.0, float(antenna_scale)))
+
+    gown = PixelArt.from_dict(override.get("gown_pixels"))
+    if gown is not None and not gown.is_empty():
+        patch["gown_art"] = gown
 
     return replace(template, **patch)
 

@@ -726,6 +726,34 @@ def draw_cord(painter: QPainter, state: RenderState) -> None:
 # --------------------------------------------------------------------------
 # robe
 # --------------------------------------------------------------------------
+def _gown_rgb(appearance, f: float) -> tuple[int, int, int]:
+    """袍子某处的颜色：有玩家纹理时**从纹理里取**，否则走源码那条 HSL 渐变。
+
+    为什么袖子和袍身都要过这个函数：玩家画了衣袍纹理却只盖住躯干、两只袖子还是原来
+    的橙色，看起来像"只刷了半个身子"（2026-10-31 实测图 `_work/v019_boards.png`）。
+    袖子（`draw_puppet_hands` 的 `_limb_band`）本来就是袍子的一片，颜色必须同源。
+    """
+    art = getattr(appearance, "gown_art", None)
+    if art is None or art.is_empty():
+        return appearance.gown(f)
+    row = min(art.h - 1, max(0, int(round(max(0.0, min(1.0, f)) * (art.h - 1)))))
+    middle = art.pixels[row][art.w // 2]
+    if middle is not None:
+        return (int(middle[1:3], 16), int(middle[3:5], 16), int(middle[5:7], 16))
+    tones = [pixel for pixel in art.pixels[row] if pixel is not None]
+    if tones:
+        # 中间是透明就取这一行的平均色：宁可近似，也不要整条袖子消失
+        return tuple(
+            sum(int(t[i:i + 2], 16) for t in tones) // len(tones) for i in (1, 3, 5)
+        )
+    return appearance.gown(f)
+
+
+def _gown_colour(appearance, f: float) -> QColor:
+    """`:func:`_gown_rgb` 的 QColor 版本（给 QBrush 直接用）。"""
+    return qc(_gown_rgb(appearance, f), 255)
+
+
 def draw_gown(painter: QPainter, state: RenderState) -> None:
     """Fill the robe the way ``MakeGridMesh("Futile_White", divs-1)`` + vertex colours does.
 
@@ -761,8 +789,28 @@ def draw_gown(painter: QPainter, state: RenderState) -> None:
     painter.setPen(Qt.PenStyle.NoPen)
     # Underlay in a mid tone: the per-row bands below meet edge to edge, and with
     # antialiasing that can leave a hairline of background at a seam.
-    painter.setBrush(QBrush(qc(state.appearance.gown(0.5), 255)))
+    painter.setBrush(QBrush(_gown_colour(state.appearance, 0.5)))
     painter.drawPath(path)
+
+    # 玩家画的袍子纹理（2026-10-31）：袍身网格是 11×11 的四边形片，逐格取纹理颜色即可。
+    # 透明格回退到源码渐变，所以"只画一部分"也是安全的。
+    gown_art = state.appearance.gown_art
+    if gown_art is not None and not gown_art.is_empty():
+        painter.setPen(Qt.PenStyle.NoPen)
+        span = max(1, divs - 1)
+        for i in range(divs - 1):
+            tx = min(gown_art.w - 1, int(i * gown_art.w / span))
+            for j in range(divs - 1):
+                ty = min(gown_art.h - 1, int(j * gown_art.h / span))
+                colour = gown_art.pixels[ty][tx]
+                brush = (QColor(colour) if colour is not None
+                         else _gown_colour(state.appearance, j / (divs - 1.0)))
+                painter.setBrush(QBrush(brush))
+                painter.drawPolygon(QPolygonF([
+                    QPointF(*grid[i][j]), QPointF(*grid[i + 1][j]),
+                    QPointF(*grid[i + 1][j + 1]), QPointF(*grid[i][j + 1]),
+                ]))
+        return
 
     # Ten bands, one per grid-row pair, each filled with a gradient between that
     # pair's two colours. A single straight gradient cannot follow the rows: the
@@ -777,7 +825,7 @@ def draw_gown(painter: QPainter, state: RenderState) -> None:
         band_path.addPolygon(band)
         band_grad = QLinearGradient(QPointF(*grid[divs // 2][j]),
                                     QPointF(*grid[divs // 2][j + 1]))
-        band_grad.setColorAt(0.0, qc(state.appearance.gown(j / (divs - 1.0)), 255))
+        band_grad.setColorAt(0.0, qc(state.appearance.gown(j / (divs - 1.0)), 255))  # noqa: E501
         band_grad.setColorAt(1.0, qc(state.appearance.gown((j + 1) / (divs - 1.0)), 255))
         painter.setBrush(QBrush(band_grad))
         painter.drawPath(band_path)
@@ -881,7 +929,9 @@ def draw_puppet_hands(painter: QPainter, state: RenderState) -> None:
         # the sleeve, so the cap has the lower index and is painted first.
         painter.drawPixmap(QRectF(tip[0] - 3.0, tip[1] - 3.0, 6.0, 6.0),
                            cap, QRectF(cap.rect()))
-        _limb_band(painter, anchor, tip, state.appearance.hand_half_w, state.appearance.gown(0.0), ctrl_a, ctrl_b)
+        # 袖子也是袍子的一片：跟着玩家纹理走（见 `_gown_colour`）
+        _limb_band(painter, anchor, tip, state.appearance.hand_half_w,
+                   _gown_rgb(state.appearance, 0.0), ctrl_a, ctrl_b)
 
 
 def face_look(look_world, axis):
@@ -950,22 +1000,39 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
 
     # PhoneSprite(side, 0/1): Circle20 at +-clamp(Lerp(7,5,|look.x|)*sign, -11, 11)
     pod_w = C._lerp(3.5, 5.0, abs(look[0]))
+    ap = state.appearance
     for sign in (-1.0, 1.0):
         offset = max(-11.0, min(11.0, C._lerp(7.0, 5.0, abs(look[0])) * sign))
         cx = state.head[0] + perp[0] * offset
         cy = state.head[1] + perp[1] * offset
-        for part, scale in ((0, 1.0), (1, 0.8)):
-            pod = tinted("Circle20", (58, 52, 56) if part == 0 else (32, 28, 32))
-            w = pod_w * scale
-            h = 5.5 * scale
-            painter.drawPixmap(QRectF(cx - w * 0.5, cy - h * 0.5, w, h), pod, QRectF(pod.rect()))
-        # PhoneSprite(side, 2): LizardScaleA1 aimed from the body outward
-        antenna = tinted("LizardScaleA1", (40, 34, 38))
         # og.cs:2185  Aim(..., vector11 - vector6*40f - vector4*10f) where
         # vector4 is the WORLD look (og.cs:2060), not the body-frame perp.
         tip = (cx - axis[0] * 40.0 - state.look_dir[0] * 10.0,
                cy - axis[1] * 40.0 - state.look_dir[1] * 10.0)
         aim = atan2(state.body0[1] - tip[1], state.body0[0] - tip[0]) * 180.0 / pi + 90.0
+
+        # 玩家画的侧边部件：一张图左右镜像（2026-10-31）。画在"触角那一端"的局部坐标系里
+        # —— 原点在耳麦中心、+y 顺着触角朝外，所以玩家画的方向就是它长出去的方向。
+        art = ap.antenna_art
+        if art is not None and not art.is_empty():
+            cell = float(ap.antenna_scale or 0.5)
+            width, height = art.w * cell, art.h * cell
+            painter.save()
+            painter.translate(QPointF(cx, cy))
+            painter.rotate(aim)
+            painter.scale(-1.0 if sign < 0 else 1.0, 1.0)
+            painter.drawPixmap(QRectF(-width * 0.5, 0.0, width, height),
+                               _art_pixmap(art), QRectF(0, 0, art.w, art.h))
+            painter.restore()
+            continue
+
+        for part, scale in ((0, 1.0), (1, 0.8)):
+            pod = tinted("Circle20", ap.pod_colour if part == 0 else ap.pod_rim_colour)
+            w = pod_w * scale
+            h = 5.5 * scale
+            painter.drawPixmap(QRectF(cx - w * 0.5, cy - h * 0.5, w, h), pod, QRectF(pod.rect()))
+        # PhoneSprite(side, 2): LizardScaleA1 aimed from the body outward
+        antenna = tinted("LizardScaleA1", ap.antenna_colour)
         painter.save()
         painter.translate(QPointF(cx, cy))
         painter.rotate(aim)
@@ -1017,6 +1084,24 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     draw_third_eye(painter, state)
 
 
+def _art_pixmap(art):
+    """``PixelArt`` → ``QPixmap``（1 格 = 1 像素，交给 drawPixmap 放大）。
+
+    每次现拼：24×20 最多 480 次 ``setPixelColor``，代价可以忽略，换来的是
+    "QPixmap 缓存什么时候失效"这一整类 bug 不存在。只有玩家装了自定义部件才会走到。
+    """
+    image = QImage(art.w, art.h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    for y in range(art.h):
+        row = art.pixels[y]
+        for x in range(art.w):
+            colour = row[x]
+            if colour is None:
+                continue
+            image.setPixelColor(x, y, QColor(colour))
+    return QPixmap.fromImage(image)
+
+
 def draw_headpiece(painter: QPainter, state: RenderState) -> None:
     """自定义像素头顶部件（玩家在工作室里画的，``Appearance.headpiece``）。
 
@@ -1040,16 +1125,7 @@ def draw_headpiece(painter: QPainter, state: RenderState) -> None:
     cy = state.head[1] + perp[1] * (look[0] * 1.0)
     cell = float(state.appearance.headpiece_scale or 0.5)
 
-    image = QImage(art.w, art.h, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(Qt.GlobalColor.transparent)
-    for y in range(art.h):
-        row = art.pixels[y]
-        for x in range(art.w):
-            colour = row[x]
-            if colour is None:
-                continue
-            image.setPixelColor(x, y, QColor(colour))
-    pixmap = QPixmap.fromImage(image)
+    pixmap = _art_pixmap(art)
 
     painter.save()
     painter.translate(QPointF(cx, cy))
