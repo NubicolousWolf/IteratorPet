@@ -590,7 +590,7 @@ def test_the_far_antenna_is_drawn_behind_the_head():
     """2026-11-01 用户报：转头时本该被脑袋遮住的那一侧天线盖在脑袋上。
 
     判据是**每侧**各自的远近，不是整张图的前后；正对镜头时两侧都在前面
-    （否则会凭空少一根）。
+    （否则会凭空少一根）。符号方向经用户第二次校正："前后反了，反一下"。
     """
     from iterator_pet.rendering import renderer
 
@@ -599,11 +599,11 @@ def test_the_far_antenna_is_drawn_behind_the_head():
     right = (1.0, 110.0, 100.0, 0.0)
 
     behind, front = renderer.split_antenna_pods([left, right], head, (1.0, 0.0))
-    assert [p[0] for p in behind] == [-1.0], "看右边 → 左边那根在头后面"
-    assert [p[0] for p in front] == [1.0]
+    assert [p[0] for p in behind] == [1.0], "看右边 → 右边那根在头后面（2026-11-01 校正过符号）"
+    assert [p[0] for p in front] == [-1.0]
 
     behind, front = renderer.split_antenna_pods([left, right], head, (-1.0, 0.0))
-    assert [p[0] for p in behind] == [1.0], "看左边 → 右边那根在头后面"
+    assert [p[0] for p in behind] == [-1.0], "看左边 → 左边那根在头后面"
 
     behind, front = renderer.split_antenna_pods([left, right], head, (0.0, 1.0))
     assert behind == [] and len(front) == 2, "正对镜头时不吞任何一根"
@@ -666,7 +666,7 @@ def test_the_far_antenna_is_really_covered_by_the_head():
                         right += 1
         return left, right
 
-    left, right = halves((1.0, 0.0))       # 看右边：左侧是远侧
-    assert left < right * 0.7, f"看右时左侧天线没有被头挡住（左 {left} / 右 {right}）"
-    left, right = halves((-1.0, 0.0))      # 看左边：右侧是远侧
-    assert right < left * 0.7, f"看左时右侧天线没有被头挡住（左 {left} / 右 {right}）"
+    left, right = halves((1.0, 0.0))       # 看右边：右侧那根在头后面
+    assert right < left * 0.7, f"看右时右侧天线没有被头挡住（左 {left} / 右 {right}）"
+    left, right = halves((-1.0, 0.0))      # 看左边：左侧那根在头后面
+    assert left < right * 0.7, f"看左时左侧天线没有被头挡住（左 {left} / 右 {right}）"

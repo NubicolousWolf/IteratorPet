@@ -947,12 +947,14 @@ def eye_offset(look, perp, axis, index):
 
 
 def split_antenna_pods(pods, head, look_dir):
-    """两侧天线 → ``(远侧, 近侧)``；远侧要**先画**（被脑袋挡住）。
+    """两侧天线 → ``(后画/被挡, 先画/在前)`` 里的**后半批**与**前半批**。
 
-    用户在 2026-11-01 报的现象："转头时本该被脑袋遮住的那一侧天线盖在脑袋上"。
-    判据是**世界视线**的 x 分量：pod 相对头心的 ``dx`` 与视线方向相反 → 在远侧。
-    ``|lx| < 0.15``（基本正对/背对镜头）时两侧都算近侧，保持原样全在前——
-    正对时两根天线都在头两侧，谁也不该被整个吞掉。
+    2026-11-01 用户实测两次校正：第一版把"远侧"先画，结果前后**正好相反**；
+    现在的判据是 ``dx * lx > 0``（pod 在**视线那一侧**）先画 → 被脑袋挡住，
+    另一侧画在头之后。``|lx| < 0.15``（正对/背对镜头）时两侧都算"在前"，
+    保持 2026-10-31 的行为：画板内容不被头吞掉。
+
+    返回值是 ``(behind, front)``：``behind`` 在头**之前**画（会被头盖住）。
     """
     lx = float(look_dir[0])
     ly = float(look_dir[1])
@@ -962,7 +964,7 @@ def split_antenna_pods(pods, head, look_dir):
     front: list = []
     for pod in pods:
         dx = pod[1] - head[0]
-        if abs(lx) >= 0.15 and dx * lx < 0.0:
+        if abs(lx) >= 0.15 and dx * lx > 0.0:
             behind.append(pod)
         else:
             front.append(pod)
