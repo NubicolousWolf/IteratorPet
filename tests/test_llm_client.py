@@ -110,14 +110,21 @@ def test_a_stage_direction_only_reply_is_still_a_line():
 
 
 def test_an_empty_reply_says_what_the_model_actually_sent(tmp_path):
-    """"空回复"必须自带原始返回片段——否则玩家和我们都没法判断是谁的锅。"""
+    """"空回复"必须自带**结构化**摘要，而不是把 JSON 头截给玩家。
+
+    2026-11-01 用户反馈：一长串 JSON 把有用信息截没了。摘要只该说三件事：
+    他说了什么 / 调了哪个工具 / 是不是被 max_tokens 截断。
+    """
     store = _store(tmp_path)
-    payload = {"choices": [{"message": {"content": ""}}]}
+    payload = {"choices": [{"message": {"content": "", "tool_calls": []},
+                            "finish_reason": "length"}]}
     client = llm_client.LLMClient(store, transport=FakeTransport(payload))
 
     result = client.ask([{"role": "user", "content": "闭眼"}], allow_actions=True)
     assert not result.ok
-    assert "原始返回" in result.reason
+    assert "finish=length" in result.reason
+    assert "截断" in result.reason
+    assert '"choices"' not in result.reason, "不许把 JSON 头塞进原因"
 
 
 def test_a_sleep_tool_call_is_not_an_empty_reply(tmp_path):

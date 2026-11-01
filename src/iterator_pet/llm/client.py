@@ -54,13 +54,51 @@ class ChatResult:
     action_args: dict = dataclass_field(default_factory=dict)  # move_to 的 x/y 等
 
 
-def _snippet(body, limit: int = 220) -> str:
-    """模型返回体的短摘要（只进"为什么失败"的原因，不落盘、不写日志文件）。"""
-    try:
-        raw = json.dumps(body, ensure_ascii=False)
-    except (TypeError, ValueError):
-        raw = str(body)
-    return raw if len(raw) <= limit else raw[:limit] + "…"
+def _snippet(body, limit: int = 240) -> str:
+    """把返回体压成"能看出发生了什么"的一行，而不是把 JSON 头塞给玩家。
+
+    2026-11-01 用户反馈：原来直接 ``json.dumps(body)[:220]``，一串
+    ``{"choices":[{"message":{"content":…`` 把真正有用的部分（他说了什么 / 调了
+    哪个工具 / 是不是被截断）全截没了。现在只挑这几件事，每段各自截短。
+    """
+    if not isinstance(body, dict):
+        return str(body)[:limit]
+    parts: list[str] = []
+    finish = ""
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices:
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        finish = str(choice.get("finish_reason") or "")
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            parts.append(f"content={content.strip()[:80]!r}")
+        for call in message.get("tool_calls") or ():
+            function = (call or {}).get("function") or {}
+            parts.append(f"tool={function.get('name')}"
+                         f"({str(function.get('arguments'))[:60]})")
+    elif isinstance(body.get("content"), list):          # anthropic
+        for block in body["content"]:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                parts.append(f"text={str(block.get('text'))[:80]!r}")
+            elif block.get("type") == "tool_use":
+                parts.append(f"tool={block.get('name')}({str(block.get('input'))[:60]})")
+        finish = str(body.get("stop_reason") or "")
+    if finish:
+        parts.append(f"finish={finish}")
+    return ("; ".join(parts) or "(空返回体)")[:limit]
+
+
+def _finish_reason(body) -> str:
+    """``finish_reason`` / ``stop_reason``：``length`` = 输出被 max_tokens 截断。"""
+    if not isinstance(body, dict):
+        return ""
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        return str(choices[0].get("finish_reason") or "")
+    return str(body.get("stop_reason") or "")
 
 
 def clean_line(raw, limit: int = MAX_LINE_CHARS) -> str:
@@ -290,12 +328,14 @@ class LLMClient:
         text = clean_line(parsed.text)
         if not text and not parsed.action:
             self.breaker.record(False)
-            # 2026-11-01：把**模型原样返回了什么**带进原因里。玩家报"空回复"时，
-            # 只有这个片段能区分"模型真的什么都没说"和"我们没接住"（围栏 JSON /
-            # 未知工具名 / 只有舞台提示被 clean_line 洗掉）。
+            # 2026-11-01：原因里给"结构化摘要"而不是 JSON 头；被 max_tokens 截断
+            # 时单独点出来——那是"模型写了长 JSON、动作被切一半"最常见的成因。
+            finish = _finish_reason(body)
+            note = ("；**输出被 max_tokens 截断**（finish=length），动作 JSON 可能是残的"
+                    if finish == "length" else "")
             return self._finish(ChatResult(
                 False,
-                reason=f"回复清洗后是空的（原始返回：{_snippet(body)}）",
+                reason=f"回复清洗后是空的（原始返回：{_snippet(body)}）{note}",
                 latency_s=latency,
                 action=parsed.action,
                 action_args=dict(getattr(parsed, "args", {}) or {}),
@@ -313,7 +353,11 @@ class LLMClient:
         payload: dict = {
             "model": cfg.model,
             "temperature": float(cfg.temperature),
-            "max_tokens": int(cfg.max_tokens),
+            # 开了行动时给输出留够空间：一个带坐标/理由的 JSON 很容易超过 120 token，
+            # 被 max_tokens 切断后 `json.loads` 必失败（2026-11-01 用户看到的
+            # "一长串 JSON 输出"就是这么来的）。
+            "max_tokens": (max(300, int(cfg.max_tokens)) if with_tools
+                           else int(cfg.max_tokens)),
             "stream": False,
         }
         rows = [dict(m) for m in messages]

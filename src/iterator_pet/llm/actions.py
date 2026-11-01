@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import time
 from dataclasses import dataclass, field as dataclass_field
 
@@ -243,6 +244,28 @@ def parse_reply(payload, protocol: str = "openai") -> ParsedReply:
                        args=action_args)
 
 
+def _salvage_action(text: str) -> ParsedReply:
+    """从**残破**的 JSON 文本里硬抠 ``action`` / ``x`` / ``y`` / ``seconds``。
+
+    2026-11-01 用户实测："原始回复是一长串 JSON，无用信息太多导致有用信息被截断"。
+    模型写了长 JSON、又被 ``max_tokens`` 掐断时，花括号不闭合、``json.loads`` 必失败，
+    但 ``"action": "move_to"`` 这些片段通常已经写出来了——这里只抠这几个键，
+    抠不到就当普通台词（``text`` 原样返回）。
+    """
+    match = re.search(r'"action"\s*:\s*"([A-Za-z_]+)"', text or "")
+    if not match:
+        return ParsedReply(text=text)
+    name = _clean_action(match.group(1))
+    if not name:
+        return ParsedReply(text=text)
+    found: dict = {}
+    for key in ("x", "y", "seconds"):
+        hit = re.search(rf'"{key}"\s*:\s*(-?\d+(?:\.\d+)?)', text)
+        if hit:
+            found[key] = float(hit.group(1))
+    return ParsedReply(text="", action=name, args=_clean_args(name, found))
+
+
 def parse_json_fallback(text: str) -> ParsedReply:
     """不支持 function calling 的模型（§3.4）：只认 ``{"action":…,"text":…}``。
 
@@ -265,11 +288,11 @@ def parse_json_fallback(text: str) -> ParsedReply:
     start = body.find("{")
     end = body.rfind("}")
     if start < 0 or end <= start:
-        return ParsedReply(text=raw)
+        return _salvage_action(raw)
     try:
         data = json.loads(body[start:end + 1])
     except ValueError:
-        return ParsedReply(text=raw)
+        return _salvage_action(raw)
     if not isinstance(data, dict):
         return ParsedReply(text=raw)
     action = _clean_action(data.get("action"))

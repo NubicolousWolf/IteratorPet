@@ -490,21 +490,35 @@ def test_sleep_from_the_model_is_not_undone_by_typing():
     assert sim.status()["posture"] == "", "宽限过了、人还在动 → 该醒"
 
 
-def test_move_to_holds_the_point_instead_of_wandering_off():
-    """到站后 60 s 内不许抽新目的地（2026-11-01：走 3 s 就转身，看着像没走到）。"""
+def test_move_to_covers_the_whole_chamber_and_holds_for_one_second():
+    """归一化必须覆盖**整个腔室**（用户 2026-11-01），到站留 1 秒就走。
+
+    旧实现先按 70 px 安全区归一化、再被"底座够得着"的 353 px 圆夹一次，
+    真正能到的只有中间一块 —— 玩家看到的就是"给了指令却没执行"。
+    """
     sim = _sim()
-    assert sim.move_to(0.9, 0.2) is True
+    assert C.MOVE_HOLD_TICKS == 40, "留驻 1 秒（40 TPS）"
+    assert sim.move_to(0.02, 0.5) is True
     target = sim.wander.follow_target
-    assert target is not None, "move_to 必须挂上显式目标"
+    assert target is not None and target[0] < 80.0, (
+        f"x=0.02 必须落在腔室左边缘附近，实际 x={target[0]:.0f}")
 
-    for _ in range(300):                       # 7.5 s：够走到 + 原来的 3 s 停留
+    best = 1e9
+    for _ in range(600):                       # 15 s
         sim.step(GAME_DT)
-    assert sim.wander.follow_target == target, "到站后不许被 wander 抽走"
-    assert C.dist(sim.creature.chunk0, target) < 80.0, "应该停在目标附近"
+        best = min(best, C.dist(sim.creature.chunk0, target))
+    assert best < 120.0, f"最接近目标只有 {best:.0f} px，还是没走到左边缘"
+    assert sim.wander.follow_target is None, "到站留 1 s 后要交还漫游"
 
-    for _ in range(C.MOVE_HOLD_TICKS):
-        sim.step(GAME_DT)
-    assert sim.wander.follow_target is None, "60 s 后交还漫游"
+
+def test_a_truncated_action_json_still_yields_the_action():
+    """被 max_tokens 掐断的 JSON（花括号不闭合）也要能抠出动作。"""
+    reply = llm_actions.parse_json_fallback('{"action": "hold", "seconds": 8')
+    assert reply.action == "hold" and reply.args == {"seconds": 8}
+
+    reply = llm_actions.parse_json_fallback(
+        '{"action":"move_to","x":0.8,"y":0.2,"reason":"去右边')
+    assert reply.action == "move_to" and reply.args == {"x": 0.8, "y": 0.2}
 
 
 def test_sleep_and_wake_intents():

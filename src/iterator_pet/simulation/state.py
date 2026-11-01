@@ -666,23 +666,30 @@ class SimulationState:
             self.intent_last = f"{action}: {detail or '当前状态拒绝'}"
 
     def move_to(self, x_norm: float, y_norm: float) -> bool:
-        """``move_to``：归一化坐标 → 安全区里的一点，然后强制走一段。
+        """``move_to``：归一化坐标 → **整个腔室**里的一点（2026-11-01 修正）。
 
-        夹取有两层：这里先按**安全区**归一化（0–1 与腔室大小/分辨率无关），
-        ``wander.set_destination`` 再按"底座当前够得着的圆"夹一次——那是既有
-        不变式（``_clamp_destination``），不绕过。
+        这里**不走** ``wander.set_destination``：那条路会先按 70 px 安全区归一化，
+        再被"底座当前够得着的 353 px 圆"夹一次，真正能到的只有中间一块，玩家看起来
+        就是"没执行"。现在直接给 ``follow_target``，范围 = 腔室减 24 px 边；底座会
+        按既有规则（``baseIdeal = 人偶位置``）自己追过来，越界仍由 ``_reachable``
+        兜底，不变式没被绕过。
         """
         self.wake_up()
         self._gaze_hold = None
         self._gaze_anchor = None
-        x, y, w, h = self.wander._safe_rect()
-        point = (x + w * max(0.0, min(1.0, float(x_norm))),
-                 y + h * max(0.0, min(1.0, float(y_norm))))
-        self.wander.set_destination(point)
-        # **到站后留在那儿**（2026-11-01 用户实测）：只 set_destination 的话，
-        # 走到目标 3 s 后 wander 会抽新目的地转身走，看起来就是"没走到"。
-        # `follow_target` 是 Wander 自带的"显式目标"分支：一直朝它走、看着它。
-        self.wander.follow_target = self.wander.next
+        bx, by, bw, bh = self._bounds
+        margin = C.MOVE_TO_MARGIN
+        point = (bx + margin + (bw - 2.0 * margin) * max(0.0, min(1.0, float(x_norm))),
+                 by + margin + (bh - 2.0 * margin) * max(0.0, min(1.0, float(y_norm))))
+        self.wander.follow_target = point
+        self.wander.next = point
+        # **必须把贝塞尔句柄清零、进度归零**：那只 set_destination 会按旧跨度随机
+        # 生成两个句柄，显式目标一挂上去、曲线仍然围着旧句柄绕——实测走出 571 →
+        # 766 → 537 的来回大圈，20 秒都到不了。零句柄 = 直线插值。
+        self.wander.current = self.creature.chunk0
+        self.wander.last_handle = (0.0, 0.0)
+        self.wander.next_handle = (0.0, 0.0)
+        self.wander.progress = 0.0
         self._move_release = int(C.MOVE_HOLD_TICKS)
         self._talk_point = None
         self._talk_anchor = None
@@ -1080,12 +1087,16 @@ class SimulationState:
         # 状态就不再看玩家、只朝自己头顶看；我们的三态抽签是设计增补，所以
         # **打坐期间不抽签**，起来后照常从段末抽。
         self._step_posture()
-        # move_to 的"留在这里"倒计时：走到点以后 follow_target 还挂着，到点才交还
-        # 漫游（60 s）。这一段里她不会自己抽新目的地。
-        if self._move_release > 0:
-            self._move_release -= 1
-            if self._move_release == 0:
-                self.wander.follow_target = None
+        # move_to 的"到站后留一秒"：**到站才开始倒数**。从下令那一刻开始倒数的
+        # 话，跨半个腔室的路上计时就归零了，她会在半路放弃目标（实测 15 s 时
+        # 已经换了目的地，看着就是"没执行"）。
+        if self.wander.follow_target is not None:
+            if C.dist(self.creature.chunk0, self.wander.follow_target) < 90.0:
+                self._move_release -= 1
+                if self._move_release <= 0:
+                    self.wander.follow_target = None
+            else:
+                self._move_release = int(C.MOVE_HOLD_TICKS)
         # 打坐/休眠与 look_at 共用一个坑：目标点**不能每 tick 现读 chunk0**——
         # 那等于"目标永远贴着自己"，而 creature.step 的 chunk1 悬垂项
         # （get_to - get_to_dir * 9）会每 tick 把身体往下压 0.24 px（实测 3 s 漂
@@ -1119,7 +1130,18 @@ class SimulationState:
         # ---- P1：抓着滑车底座拖（直接操纵，整块跳过迟滞跟随）-------------
         # 迟滞那一套是"人偶走了、底座该不该动"的决策；手抓在底座上时这个决策没有
         # 意义，而且它会把 frame_pos 改回身体方向，和手对打。
-        if self.dragging and self.drag_mode == "base" and self.drag_point is not None:
+        if self.wander.follow_target is not None and not self.dragging:
+            # 命令模式（2026-11-01）：有显式 move_to 时，滑车**直接朝目标平移**
+            # （BASE_SPEED_COMMAND），不走"人偶先顶到臂展极限、滑车再慢慢追"的
+            # 两段式——那条路横穿 1138 px 要 20–30 s，玩家看到的就是"没执行"。
+            target_f = self.rail.project_near(self.wander.follow_target, self.frame_pos)
+            self.frame_pos = move_towards_angle(
+                self.frame_pos * 90.0, target_f * 90.0, C.BASE_SPEED_COMMAND
+            ) / 90.0 % 4.0
+            self.base_moving = True
+            self.base_ideal = self.wander.follow_target
+            ideal_f = target_f
+        elif self.dragging and self.drag_mode == "base" and self.drag_point is not None:
             # 目标必须用 project_near：project 在腔室四条对角平分线上不连续，
             # 拖过中心时会整段跳到邻边（rail.py:134-192）。
             target_f = self.rail.project_near(self.drag_point, self.frame_pos)
@@ -1199,7 +1221,10 @@ class SimulationState:
         # 兜底：身体真的跑到臂展之外（拖拽残留、甩出、极端行为）时拉回边界。
         # 用 1.02 倍留一点余量，正常漫游碰不到这条分支。
         limit = sum(C.ARM_LENGTHS) * C.ARM_REACH_RATIO * 1.02
-        if C.dist(pose.point, self.creature.chunk0) > limit:
+        # 命令模式下**不拉回**：滑车正以 BASE_SPEED_COMMAND 朝目标平移，这期间
+        # 允许手臂暂时被拉长；命令结束（follow_target 清空）立刻恢复硬约束。
+        if (self.wander.follow_target is None
+                and C.dist(pose.point, self.creature.chunk0) > limit):
             fixed = self._reachable(pose.point, self.creature.chunk0)
             self._translate_creature((fixed[0] - self.creature.chunk0[0],
                                       fixed[1] - self.creature.chunk0[1]))

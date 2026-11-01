@@ -142,6 +142,11 @@ BASE_MOVE_START_REACH_RATIO = 0.85
 BASE_SPEED_SLOW = 0.12         # degrees of the scaled angle per tick
 BASE_SPEED_FAST = 0.45
 BASE_STABLE_TICKS = 30         # consistentBasePosCounter > 30
+# 2026-11-01：`move_to` 命令下的滑车速度。漫游用 0.12/0.45（1.0 会"像滑车在飞"，
+# AGENTS §6.4），但那是**空闲漫步**的观感标准；玩家明确命令"走到那边"时，让滑车
+# 按接近源码的字面速度（1°/tick）平移才是他要的"执行了"。只在 follow_target 存在
+# 且没在拖拽时生效，命令结束就回 0.12/0.45。
+BASE_SPEED_COMMAND = 1.0
 # Design addition (not in the source): the arm is 570 px, so the carriage must
 # follow once the puppet is further than this fraction of it, ignoring the
 # hysteresis and the stability gate. The source never needs it -- its room is
@@ -342,9 +347,14 @@ WORLD_WAKE_IDLE_S = 2.0        # 输入恢复这么多秒内就醒
 # 0.5 s，睡下第一 tick 就被"输入回来了"叫醒，等于没睡。宽限期内只有戳/拖/喊醒
 # 能叫醒她；世界驱动的休眠（A5）没有宽限。
 SLEEP_EXPLICIT_GRACE_TICKS = 800      # 20 s
-# `move_to` 到站后**留在这**多久再交还漫游。不留就是"走 3 秒、抽新目标、转身走"，
-# 玩家看到的是"没走到指定位置"。
-MOVE_HOLD_TICKS = 2400                # 60 s
+# `move_to` 到站后**留在这**多久再交还漫游。2026-11-01 先写 60 s，用户当场否掉：
+# "静止 60 秒太过了，留一秒就可以" → 40 tick。
+MOVE_HOLD_TICKS = 40                  # 1 s
+# `move_to` 的归一化覆盖**整个腔室**（只留这点边，别让身体压到屏幕边）。
+# 2026-11-01 用户实测："移动范围不是整个腔室，所以才会看起来没执行"——
+# 原来的坐标先按 wander 的 70 px 安全区归一化、又被"底座够得着"的 353 px 圆夹
+# 一次，真正可走的范围只有中间一块。
+MOVE_TO_MARGIN = 24.0
 
 # ss.cs:4174-4204  Investigate: player.DangerPos + DegToVec(angle) * 150f, with
 # the angle kept inside (-70, 70) and swept at 0.4-0.8 deg/tick, random sign.
