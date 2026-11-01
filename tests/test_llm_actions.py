@@ -22,6 +22,7 @@ from iterator_pet.llm import config as llm_config
 from iterator_pet.platform.fixed_loop import GAME_DT
 from iterator_pet.simulation import constants as C
 from iterator_pet.simulation.state import SimulationState
+from iterator_pet.simulation.world import WorldState
 
 SECRET = "sk-1234567890abcdefghijklmn"
 
@@ -467,6 +468,43 @@ def test_a_parameter_action_is_not_blocked_by_the_speech_bubble():
     sim.llm = StubRouter([llm_actions.Intent("tremble")])
     assert sim._apply_intents() is False
     assert sim.intent_rejected == 1, "仪式仍然不许在说话中间起"
+
+
+def test_sleep_from_the_model_is_not_undone_by_typing():
+    """明确让她睡 → 不能因为"玩家刚打完字（输入空闲 0.5 s）"下一 tick 就醒。
+
+    2026-11-01 用户实测："sleep 显示执行，实际不生效"——就是 `wake_signal` 太灵。
+    """
+    sim = _sim()
+    sim.observe_world(WorldState(hour=14, user_idle_s=0.5, valid=True))
+    assert sim.reactions.wake_signal is True
+
+    sim.llm = StubRouter([llm_actions.Intent("sleep")])
+    assert sim._apply_intents() is False
+    for _ in range(60):
+        sim.step(GAME_DT)
+    assert sim.status()["posture"] == "sleep", "20 s 宽限期内不许被输入叫醒"
+
+    for _ in range(C.SLEEP_EXPLICIT_GRACE_TICKS):
+        sim.step(GAME_DT)
+    assert sim.status()["posture"] == "", "宽限过了、人还在动 → 该醒"
+
+
+def test_move_to_holds_the_point_instead_of_wandering_off():
+    """到站后 60 s 内不许抽新目的地（2026-11-01：走 3 s 就转身，看着像没走到）。"""
+    sim = _sim()
+    assert sim.move_to(0.9, 0.2) is True
+    target = sim.wander.follow_target
+    assert target is not None, "move_to 必须挂上显式目标"
+
+    for _ in range(300):                       # 7.5 s：够走到 + 原来的 3 s 停留
+        sim.step(GAME_DT)
+    assert sim.wander.follow_target == target, "到站后不许被 wander 抽走"
+    assert C.dist(sim.creature.chunk0, target) < 80.0, "应该停在目标附近"
+
+    for _ in range(C.MOVE_HOLD_TICKS):
+        sim.step(GAME_DT)
+    assert sim.wander.follow_target is None, "60 s 后交还漫游"
 
 
 def test_sleep_and_wake_intents():

@@ -249,6 +249,8 @@ class SimulationState:
         # 第三组：look_at 的"只看不走"（点, 剩余 tick）与它钉住的锚点
         self._gaze_hold: tuple[tuple[float, float], int] | None = None
         self._gaze_anchor: tuple[float, float] | None = None
+        self._sleep_grace = 0         # 明确要求睡下时的"装睡"宽限（tick）
+        self._move_release = 0        # move_to 到站后还要留在原地多久（tick）
         # 电脑状态（2026-11-01 第二组）：传感器 1 Hz 喂进来，映射在 world.py。
         # 默认 `valid=False` = 没采样过，一切维持原样。
         self.world = WorldState()
@@ -376,6 +378,9 @@ class SimulationState:
         self.wake_up()          # 被拎起来就别再打坐了（2026-11-01 打坐姿态层）
         self._gaze_hold = None  # look_at 也当场作废：抓着她还盯着别处很怪
         self._gaze_anchor = None
+        # 抓着就不该再"走向某点"：清掉 move_to 的显式目标与留驻倒计时
+        self.wander.follow_target = None
+        self._move_release = 0
         self.drag_mode = mode
         self.drag_point = point
         if point is not None:
@@ -635,7 +640,8 @@ class SimulationState:
             self._record_intent(action, ok, f"({float(x):.2f},{float(y):.2f})")
             return False
         if action == "sleep":
-            self._record_intent(action, self.enter_sleep())
+            # explicit=True：给 20 s 宽限，别被"刚打完字的输入"立刻叫醒
+            self._record_intent(action, self.enter_sleep(explicit=True))
             return False
         if action == "wake":
             self._record_intent(action, self.wake_up())
@@ -673,6 +679,11 @@ class SimulationState:
         point = (x + w * max(0.0, min(1.0, float(x_norm))),
                  y + h * max(0.0, min(1.0, float(y_norm))))
         self.wander.set_destination(point)
+        # **到站后留在那儿**（2026-11-01 用户实测）：只 set_destination 的话，
+        # 走到目标 3 s 后 wander 会抽新目的地转身走，看起来就是"没走到"。
+        # `follow_target` 是 Wander 自带的"显式目标"分支：一直朝它走、看着它。
+        self.wander.follow_target = self.wander.next
+        self._move_release = int(C.MOVE_HOLD_TICKS)
         self._talk_point = None
         self._talk_anchor = None
         # 走的过程中别被抽签换成就地搭话：强切一段 roaming。
@@ -693,6 +704,8 @@ class SimulationState:
                  y + h * max(0.0, min(1.0, float(y_norm))))
         self._gaze_anchor = self.creature.chunk0
         self._gaze_hold = (point, max(1, int(ticks)))
+        self.wander.follow_target = None       # "只看不走"：清掉在走的显式目标
+        self._move_release = 0
         return True
 
     def _behaviour_targets(self) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -760,6 +773,8 @@ class SimulationState:
         self.posture = "meditate"
         self._meditate_age = 0
         self._meditate_anchor = self.creature.chunk0
+        self.wander.follow_target = None       # 坐下就别再"走向某点"
+        self._move_release = 0
         self.meditate_left = (int(C.MEDITATE_MAX_TICKS) if ticks is None
                               else max(1, int(ticks)))
         self._talk_point = None
@@ -776,16 +791,24 @@ class SimulationState:
         self._meditate_anchor = None
         return True
 
-    def enter_sleep(self) -> bool:
-        """睡着（A5/B5）：复用打坐的"原地 + 闭眼"，只是不自己醒来。"""
+    def enter_sleep(self, explicit: bool = False) -> bool:
+        """睡着（A5/B5）：复用打坐的"原地 + 闭眼"，只是不自己醒来。
+
+        ``explicit=True`` = 有人明确让她睡（LLM 的 ``sleep``）：给 20 s 宽限，
+        否则玩家刚打完字、输入空闲 < 2 s，第一 tick 就被"输入回来了"叫醒。
+        世界驱动的休眠没有宽限（人真的走了才睡）。
+        """
         if self.posture:
             return False
         self.posture = "sleep"
         self._meditate_age = 0
         self.meditate_left = 0
+        self._sleep_grace = (C.SLEEP_EXPLICIT_GRACE_TICKS if explicit else 0)
         self._meditate_anchor = self.creature.chunk0
         self._talk_point = None
         self._talk_anchor = None
+        self.wander.follow_target = None       # 睡下就不再"走向某点"
+        self._move_release = 0
         return True
 
     @property
@@ -828,7 +851,12 @@ class SimulationState:
             return
         if self.posture == "sleep":
             self._meditate_age += 1
-            if self.reactions.wake_signal:
+            if self._sleep_grace > 0:
+                # 被**明确要求**睡下时的宽限（2026-11-01 用户实测）：玩家刚打完字，
+                # 输入空闲是 0.5 s，`wake_signal` 立刻把她叫醒，等于"显示执行、
+                # 实际没睡"。宽限期内只有戳/拖/喊 wake 能叫醒。
+                self._sleep_grace -= 1
+            elif self.reactions.wake_signal:
                 self.wake_up()
             return
         if self.posture == "meditate":
@@ -1052,6 +1080,12 @@ class SimulationState:
         # 状态就不再看玩家、只朝自己头顶看；我们的三态抽签是设计增补，所以
         # **打坐期间不抽签**，起来后照常从段末抽。
         self._step_posture()
+        # move_to 的"留在这里"倒计时：走到点以后 follow_target 还挂着，到点才交还
+        # 漫游（60 s）。这一段里她不会自己抽新目的地。
+        if self._move_release > 0:
+            self._move_release -= 1
+            if self._move_release == 0:
+                self.wander.follow_target = None
         # 打坐/休眠与 look_at 共用一个坑：目标点**不能每 tick 现读 chunk0**——
         # 那等于"目标永远贴着自己"，而 creature.step 的 chunk1 悬垂项
         # （get_to - get_to_dir * 9）会每 tick 把身体往下压 0.24 px（实测 3 s 漂

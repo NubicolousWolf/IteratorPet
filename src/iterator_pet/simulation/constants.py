@@ -338,6 +338,13 @@ WORLD_MEDITATE_NIGHT_GAIN = 4.0   # 深夜打坐的骰子 ×4
 # A5/B5 休眠：多久没人碰算睡着。用户没给数，先与空闲自语同档（20 min）。
 WORLD_SLEEP_AFTER_S = 1200.0
 WORLD_WAKE_IDLE_S = 2.0        # 输入恢复这么多秒内就醒
+# 被**明确要求**睡下（LLM 的 sleep）时的"装睡"宽限：玩家刚打完字，输入空闲是
+# 0.5 s，睡下第一 tick 就被"输入回来了"叫醒，等于没睡。宽限期内只有戳/拖/喊醒
+# 能叫醒她；世界驱动的休眠（A5）没有宽限。
+SLEEP_EXPLICIT_GRACE_TICKS = 800      # 20 s
+# `move_to` 到站后**留在这**多久再交还漫游。不留就是"走 3 秒、抽新目标、转身走"，
+# 玩家看到的是"没走到指定位置"。
+MOVE_HOLD_TICKS = 2400                # 60 s
 
 # ss.cs:4174-4204  Investigate: player.DangerPos + DegToVec(angle) * 150f, with
 # the angle kept inside (-70, 70) and swept at 0.4-0.8 deg/tick, random sign.
