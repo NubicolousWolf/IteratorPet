@@ -558,7 +558,10 @@ class SimulationState:
             return "仪式进行中"
         if self.dragging:
             return "正在拖拽"
-        if self.dialogue.text:
+        if self.dialogue.text and action in ("tremble", "investigate", "talk"):
+            # 台词气泡只挡"换情绪/换姿态"的旧动作——它们会和气泡抢画面。
+            # **参数动作不挡**（2026-11-01 实测）：玩家说"走到右边"时她本来就在
+            # 说话，挡掉等于这条指令白下（用户看到的就是"进了队列却没动"）。
             return "正在说话"
         if action in ("investigate", "talk"):
             if self.cursor is None:
@@ -615,12 +618,16 @@ class SimulationState:
             self._record_intent(action, ok, f"{seconds}s")
             return False
         if action == "move_to":
-            ok = self.move_to(args.get("x", 0.5), args.get("y", 0.5))
-            self._record_intent(action, ok)
+            x, y = args.get("x", 0.5), args.get("y", 0.5)
+            ok = self.move_to(x, y)
+            # 面板/日志里带上目标：模型把坐标写成 px（800, 400）时会被夹成 1.0,
+            # 这时"没动"和"目标就在脚下"长得一样，只有数字能区分。
+            self._record_intent(action, ok, f"({float(x):.2f},{float(y):.2f})")
             return False
         if action == "look_at":
-            ok = self.look_at(args.get("x", 0.5), args.get("y", 0.5))
-            self._record_intent(action, ok)
+            x, y = args.get("x", 0.5), args.get("y", 0.5)
+            ok = self.look_at(x, y)
+            self._record_intent(action, ok, f"({float(x):.2f},{float(y):.2f})")
             return False
         if action == "sleep":
             self._record_intent(action, self.enter_sleep())

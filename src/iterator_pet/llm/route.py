@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 
 from . import actions as llm_actions
 from . import client as llm_client
@@ -40,6 +40,7 @@ class Reply:
     event: str = ""
     reason: str = ""
     action: str = ""          # 模型同时要求的动作（已经进队列，这里只是给面板看）
+    action_args: dict = dataclass_field(default_factory=dict)   # move_to 的 x/y 等
 
 
 class LLMRouter:
@@ -227,7 +228,8 @@ class LLMRouter:
             if result.text:
                 self.chat.append("assistant", result.text)
             self.last_reply = Reply(
-                text=result.text, source="llm", event=event, action=action
+                text=result.text, source="llm", event=event, action=action,
+                action_args=dict(getattr(result, "action_args", {}) or {}),
             )
         else:
             reason = getattr(result, "reason", "") or "没有回复"

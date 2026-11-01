@@ -27,7 +27,7 @@ WHITELIST = ("investigate", "talk", "move_to", "hold", "look_at",
              "sleep", "wake", "tremble", "idle")
 # 动作维持多久（tick，40 TPS）。investigate/talk 用现有段长；idle 用 roaming 段长。
 # 动作在队列里最多活 5 s：闸门关着时等它开，但不能过很久突然执行（仪式/拖拽可能持续很久）
-INTENT_TTL_S = 5.0
+INTENT_TTL_S = 10.0
 
 ACTION_TICKS = {"investigate": 240, "talk": 900, "move_to": 600, "idle": 450}
 BEHAVIOUR_OF = {"investigate": "investigate", "talk": "talk",
@@ -53,7 +53,11 @@ TOOL_GUIDE = (
     "- wake：从休眠或打坐中醒来，恢复平时的漫游。\n"
     "- tremble：起身、发光、散出电光，用于表达你对用户的强烈不满。\n"
     "- idle：什么也不做，回到平时的漫游。\n"
-    "如果只想回一句话、不需要改变姿态或位置，只调用 speak，不要附带 act。"
+    "如果只想回一句话、不需要改变姿态或位置，只调用 speak，不要附带 act。\n"
+    "【例子】用户说「走到右上角去」→ act(action=\\\"move_to\\\", x=0.85, y=0.15)；"
+    "「闭眼坐五秒」→ act(action=\\\"hold\\\", seconds=5)；"
+    "「睡吧」→ act(action=\\\"sleep\\\")；「醒醒」→ act(action=\\\"wake\\\")；"
+    "「看看左上角」→ act(action=\\\"look_at\\\", x=0.1, y=0.1)。"
 )
 
 _TOOL_SPEAK = {
@@ -181,10 +185,15 @@ def parse_reply(payload, protocol: str = "openai") -> ParsedReply:
                 text += block["text"]
             elif kind == "tool_use":
                 args = _as_args(block.get("input"))
-                if block.get("name") == "speak" and isinstance(args.get("text"), str):
+                tool = str(block.get("name") or "")
+                if tool == "speak" and isinstance(args.get("text"), str):
                     text = text or args["text"]
-                elif block.get("name") == "act":
-                    name = _clean_action(args.get("action"))
+                elif tool == "act" or tool in WHITELIST:
+                    # 两种形态都认（2026-11-01 用户实测）：模型有时不套 act，
+                    # 直接把动作名当工具调用（`sleep()` / `hold(seconds=8)`）。
+                    # 只认 act 时这类回复 action/text 都为空 → 玩家看到"空回复"。
+                    name = (_clean_action(args.get("action")) if tool == "act"
+                            else _clean_action(tool))
                     if name and not action:
                         action = name
                         action_args = _clean_args(name, args)
@@ -203,12 +212,14 @@ def parse_reply(payload, protocol: str = "openai") -> ParsedReply:
                 if not isinstance(call, dict):
                     continue
                 function = call.get("function") or {}
-                name = function.get("name")
+                tool = str(function.get("name") or "")
                 args = _as_args(function.get("arguments"))
-                if name == "speak" and isinstance(args.get("text"), str):
+                if tool == "speak" and isinstance(args.get("text"), str):
                     text = text or args["text"]
-                elif name == "act":
-                    name = _clean_action(args.get("action"))
+                elif tool == "act" or tool in WHITELIST:
+                    # 同 Anthropic 分支：`act(action="sleep")` 与直接 `sleep()` 都认。
+                    name = (_clean_action(args.get("action")) if tool == "act"
+                            else _clean_action(tool))
                     if name and not action:
                         action = name
                         action_args = _clean_args(name, args)
@@ -224,16 +235,26 @@ def parse_json_fallback(text: str) -> ParsedReply:
 
     严格到"只读这几个字段"，解析不出来就**只保留文本**（当普通台词）。
     第三组起同时认 ``x`` / ``y`` / ``seconds``，夹取规则与 ``_clean_args`` 同一份。
+
+    **容忍代码围栏与前后废话**（2026-11-01 实测）：弱模型会把 JSON 包在
+    ```json ... ``` 里，或者前面先写一句"好的，我这就去"，原实现只认
+    "整段以 { 开头"，于是模型明明给了动作却被当成普通台词，玩家看到的是
+    "加入意图队列"时有时无。现在先剥围栏，再在整段里找第一个 ``{...}``。
     """
     raw = (text or "").strip()
     if not raw:
         return ParsedReply()
-    start = raw.find("{")
-    end = raw.rfind("}")
+    body = raw
+    if "```" in body:                     # ```json\n{...}\n``` → {...}
+        body = body.replace("```json", "```").replace("```JSON", "```")
+        parts = body.split("```")
+        body = max(parts, key=len).strip() if len(parts) > 1 else body
+    start = body.find("{")
+    end = body.rfind("}")
     if start < 0 or end <= start:
         return ParsedReply(text=raw)
     try:
-        data = json.loads(raw[start:end + 1])
+        data = json.loads(body[start:end + 1])
     except ValueError:
         return ParsedReply(text=raw)
     if not isinstance(data, dict):
@@ -244,6 +265,8 @@ def parse_json_fallback(text: str) -> ParsedReply:
         spoken = ""
     if not action and not spoken:
         return ParsedReply(text=raw)
+    # 只有 JSON 里的动作：台词留空，但 `clean_line` 会把原文当台词——所以这里
+    # 明确把"没给 text"的 JSON 结果与"普通台词"区分开（上层按 action 判空）。
     return ParsedReply(text=spoken.strip(), action=action,
                        reason=str(data.get("reason") or ""),
                        args=_clean_args(action, data) if action else {})

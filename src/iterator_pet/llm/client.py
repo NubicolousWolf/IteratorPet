@@ -261,11 +261,11 @@ class LLMClient:
             self.breaker.record(False)
             return self._finish(ChatResult(False, reason=reason, latency_s=latency))
 
-        # 不支持 function calling 的模型会直接甩一段 JSON 文本（§3.4）
-        if not parsed.action and not parsed.text:
-            self.breaker.record(False)
-            return self._finish(ChatResult(False, reason="空回复", latency_s=latency))
-        if not parsed.action and parsed.text.strip().startswith("{"):
+        # 不支持 function calling 的模型会直接甩一段 JSON 文本（§3.4）。
+        # 2026-11-01：不要求"整段以 { 开头"——弱模型爱包代码围栏或先写一句废话，
+        # 只要文本里出现 `"action"` 就试着解析（`parse_json_fallback` 自己会剥）。
+        if not parsed.action and ('"action"' in parsed.text
+                                  or parsed.text.strip().startswith("{")):
             fallback = llm_actions.parse_json_fallback(parsed.text)
             if fallback.action or fallback.text:
                 parsed = fallback

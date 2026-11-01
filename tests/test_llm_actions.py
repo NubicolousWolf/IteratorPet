@@ -391,6 +391,61 @@ def test_a_look_at_intent_only_turns_the_gaze():
     assert sim.status()["posture"] == "", "look_at 不是打坐：不闭眼、不换姿态"
 
 
+def test_a_tool_named_like_the_action_is_accepted():
+    """弱模型不套 `act`，直接把动作名当工具调用（2026-11-01 用户实测）。
+
+    只认 `act` 时，`sleep()` / `hold()` 这种回复 action 与 text 都为空，
+    玩家看到的就是"空回复"——人偶当然也没睡、没坐。
+    """
+    reply = llm_actions.parse_reply({"choices": [{"message": {"tool_calls": [
+        {"function": {"name": "sleep", "arguments": "{}"}}]}}]})
+    assert reply.action == "sleep"
+
+    reply = llm_actions.parse_reply({"choices": [{"message": {"tool_calls": [
+        {"function": {"name": "hold",
+                      "arguments": json.dumps({"seconds": 8})}}]}}]})
+    assert reply.action == "hold" and reply.args == {"seconds": 8}
+
+    reply = llm_actions.parse_reply(
+        {"content": [{"type": "tool_use", "name": "move_to",
+                      "input": {"x": 0.7, "y": 0.3}}]}, "anthropic")
+    assert reply.action == "move_to" and reply.args == {"x": 0.7, "y": 0.3}
+
+
+def test_a_fenced_json_reply_is_understood():
+    """弱模型会把动作包在 ```json``` 里、前面还先寒暄一句（2026-11-01 实测）。
+
+    原实现只认"整段以 { 开头"，于是这类回复被当成普通台词，玩家看到的是
+    "有时进队列、有时不进"。
+    """
+    reply = llm_actions.parse_json_fallback(
+        '好的，我这就去。\n```json\n{"action": "move_to", "x": 0.8, "y": 0.2}\n```'
+    )
+    assert reply.action == "move_to"
+    assert reply.args == {"x": 0.8, "y": 0.2}, "围栏要剥掉、坐标要带出来"
+
+
+def test_a_parameter_action_is_not_blocked_by_the_speech_bubble():
+    """她正在说话时，`move_to` 这类参数动作**必须**照样执行。
+
+    用户 2026-11-01 实测："进了意图队列但人偶没动" —— 因为回复带台词 → 气泡占着
+    → `_intent_refusal` 用"正在说话"一票否决，5 秒后意图过期。台词气泡只该挡
+    tremble/investigate/talk 这种换情绪的动作。
+    """
+    sim = _sim()
+    sim.dialogue.start("我这就过去。")
+    assert sim.dialogue.text, "前提：气泡正占着"
+
+    sim.llm = StubRouter([llm_actions.Intent("move_to", args={"x": 0.8, "y": 0.2})])
+    assert sim._apply_intents() is False
+    assert sim.intent_accepted == 1 and sim.intent_rejected == 0
+    assert sim.intent_last.startswith("move_to")
+
+    sim.llm = StubRouter([llm_actions.Intent("tremble")])
+    assert sim._apply_intents() is False
+    assert sim.intent_rejected == 1, "仪式仍然不许在说话中间起"
+
+
 def test_sleep_and_wake_intents():
     sim = _sim()
     sim.llm = StubRouter([llm_actions.Intent("sleep")])

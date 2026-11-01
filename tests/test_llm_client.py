@@ -96,6 +96,23 @@ def test_build_messages_keeps_system_history_then_the_new_line():
 
 
 # --------------------------------------------------- 关掉 = 零请求（A1） --
+def test_a_sleep_tool_call_is_not_an_empty_reply(tmp_path):
+    """模型直接调 `sleep()`（不套 act）时，这次回复**不许**被判成"空回复"。
+
+    2026-11-01 用户实测："要求人偶 sleep / hold，它给空回复"——解析层只认
+    `act`/`speak`，`sleep()` 这种工具调用被整条丢掉，`action` 与 `text` 都空。
+    """
+    store = _store(tmp_path)
+    payload = {"choices": [{"message": {"content": None, "tool_calls": [
+        {"function": {"name": "sleep", "arguments": "{}"}}]}}]}
+    client = llm_client.LLMClient(store, transport=FakeTransport(payload))
+
+    result = client.ask([{"role": "user", "content": "睡吧"}], allow_actions=True)
+    assert result.ok, result.reason
+    assert result.action == "sleep"
+    assert result.reason == ""
+
+
 def test_disabled_client_never_touches_the_network(tmp_path):
     store = _store(tmp_path)
     transport = FakeTransport(_reply("不该出现"))
