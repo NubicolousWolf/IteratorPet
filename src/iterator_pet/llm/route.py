@@ -222,6 +222,7 @@ class LLMRouter:
                     action,
                     getattr(result, "action_reason", ""),
                     min_interval_s=float(self.store.config.action_cooldown_s),
+                    args=dict(getattr(result, "action_args", {}) or {}),
                 )
             if result.text:
                 self.chat.append("assistant", result.text)

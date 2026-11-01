@@ -19,6 +19,7 @@ import pytest
 from iterator_pet.llm import actions as llm_actions
 from iterator_pet.llm import client as llm_client
 from iterator_pet.llm import config as llm_config
+from iterator_pet.platform.fixed_loop import GAME_DT
 from iterator_pet.simulation import constants as C
 from iterator_pet.simulation.state import SimulationState
 
@@ -306,3 +307,95 @@ def test_a_stale_action_expires_instead_of_firing_later():
     clock[0] = 6.0
     assert queue.peek() is None, "过期就不给"
     assert queue.pop() is None
+
+
+# ------------------------------------------------ 第三组：带参数的动作 ----
+def test_the_new_actions_are_whitelisted_and_documented():
+    """move_to / hold / look_at / sleep / wake 都要能被模型看见。"""
+    for name in ("move_to", "hold", "look_at", "sleep", "wake"):
+        assert name in llm_actions.WHITELIST
+        assert name in llm_actions.TOOL_GUIDE, "写进白名单但没写进说明 = 模型不会用"
+    schema = llm_actions._TOOL_ACT["parameters"]["properties"]
+    assert schema["x"]["maximum"] == 1.0 and schema["y"]["minimum"] == 0.0
+    assert schema["seconds"]["minimum"] == llm_actions.HOLD_MIN_S
+    assert schema["seconds"]["maximum"] == llm_actions.HOLD_MAX_S
+    assert set(schema["action"]["enum"]) == set(llm_actions.WHITELIST)
+
+
+def test_coordinates_and_seconds_are_clamped_at_the_edge():
+    """模型写 1.7 / 999 不许把仿真带飞：一处收口（`_clean_args`）。"""
+    reply = llm_actions.parse_reply({"choices": [{"message": {"tool_calls": [
+        {"function": {"name": "act",
+                      "arguments": json.dumps({"action": "move_to", "x": 0.2, "y": 7})}}]}}]})
+    assert reply.action == "move_to"
+    assert reply.args == {"x": 0.2, "y": 1.0}
+
+    reply = llm_actions.parse_reply(
+        {"content": [{"type": "tool_use", "name": "act",
+                      "input": {"action": "hold", "seconds": 999}}]}, "anthropic")
+    assert reply.args == {"seconds": llm_actions.HOLD_MAX_S}
+
+    reply = llm_actions.parse_json_fallback('{"action":"look_at","x":-3,"y":0.4}')
+    assert reply.args == {"x": 0.0, "y": 0.4}
+
+
+def test_fields_that_do_not_belong_to_the_action_are_dropped():
+    reply = llm_actions.parse_reply({"choices": [{"message": {"tool_calls": [
+        {"function": {"name": "act",
+                      "arguments": json.dumps({"action": "talk", "x": 0.5})}}]}}]})
+    assert reply.action == "talk"
+    assert reply.args == {}, "talk 不吃坐标，别把垃圾参数带进队列"
+
+
+def test_the_queue_carries_the_action_arguments():
+    queue = llm_actions.IntentQueue(clock=lambda: 0.0, ttl_s=5.0)
+    assert queue.push("move_to", args={"x": 0.25, "y": 0.75}, min_interval_s=0.0)
+    intent = queue.pop()
+    assert intent is not None and intent.args == {"x": 0.25, "y": 0.75}
+
+
+def test_a_move_to_intent_actually_moves_her():
+    sim = _sim()
+    start = sim.creature.chunk0
+    sim.llm = StubRouter([llm_actions.Intent("move_to",
+                                             args={"x": 0.1, "y": 0.9})])
+    assert sim._apply_intents() is False
+    assert sim.intent_accepted == 1
+    for _ in range(120):
+        sim.step(GAME_DT)
+    assert C.dist(start, sim.creature.chunk0) > 20.0, "move_to 必须真的走起来"
+
+
+def test_a_hold_intent_sits_down_for_the_requested_seconds():
+    sim = _sim()
+    sim.llm = StubRouter([llm_actions.Intent("hold", args={"seconds": 6})])
+    assert sim._apply_intents() is False
+    assert sim.status()["posture"] == "meditate"
+    assert sim.meditate_left == 6 * int(C.GAME_HZ)
+
+
+def test_hold_can_exceed_the_natural_meditate_ceiling():
+    """`hold` 允许 120 s，而自然打坐的上限是 60 s —— 显式时长不能被夹回 60 s。"""
+    sim = _sim()
+    sim.llm = StubRouter([llm_actions.Intent("hold", args={"seconds": 120})])
+    assert sim._apply_intents() is False
+    assert sim.meditate_left == 120 * int(C.GAME_HZ)
+
+
+def test_a_look_at_intent_only_turns_the_gaze():
+    sim = _sim()
+    sim.llm = StubRouter([llm_actions.Intent("look_at",
+                                             args={"x": 0.9, "y": 0.1})])
+    assert sim._apply_intents() is False
+    assert sim._gaze_hold is not None
+    assert sim.status()["posture"] == "", "look_at 不是打坐：不闭眼、不换姿态"
+
+
+def test_sleep_and_wake_intents():
+    sim = _sim()
+    sim.llm = StubRouter([llm_actions.Intent("sleep")])
+    assert sim._apply_intents() is False
+    assert sim.status()["posture"] == "sleep"
+    sim.llm = StubRouter([llm_actions.Intent("wake")])
+    assert sim._apply_intents() is False
+    assert sim.status()["posture"] == ""

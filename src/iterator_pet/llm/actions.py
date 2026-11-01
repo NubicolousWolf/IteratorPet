@@ -21,25 +21,39 @@ from __future__ import annotations
 import json
 import queue
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 
-WHITELIST = ("investigate", "talk", "tremble", "idle")
+WHITELIST = ("investigate", "talk", "move_to", "hold", "look_at",
+             "sleep", "wake", "tremble", "idle")
 # 动作维持多久（tick，40 TPS）。investigate/talk 用现有段长；idle 用 roaming 段长。
 # 动作在队列里最多活 5 s：闸门关着时等它开，但不能过很久突然执行（仪式/拖拽可能持续很久）
 INTENT_TTL_S = 5.0
 
-ACTION_TICKS = {"investigate": 240, "talk": 900, "idle": 450}
-BEHAVIOUR_OF = {"investigate": "investigate", "talk": "talk", "idle": "roaming"}
+ACTION_TICKS = {"investigate": 240, "talk": 900, "move_to": 600, "idle": 450}
+BEHAVIOUR_OF = {"investigate": "investigate", "talk": "talk",
+                "move_to": "roaming", "idle": "roaming"}
+# 带坐标/时长的动作（2026-11-01 第三组）。参数在 `_clean_args` 里统一夹取，
+# 状态层不再重复校验——**一处收口**，免得 schema 说 0–1、代码却收 0–100。
+COORD_ACTIONS = ("move_to", "look_at")
+SECONDS_ACTIONS = ("hold",)
+HOLD_MIN_S = 3
+HOLD_MAX_S = 120
 
 # 给模型看的说明（§3.3）。**必须写清"动作到底意味着什么"**，否则模型会以为
 # talk 是"说话"，于是每句话都挂一个动作。
 TOOL_GUIDE = (
-    "【动作的含义】act 会真的改变你的姿态，所以只有在你确实想做点什么时才调用：\n"
-    "- investigate：跟随光标移动一段时间。\n"
-    "- talk：走到玩家光标旁边、悬停在那里看着光标（不是\"说话\"；说话用 speak）\n"
+    "【动作的含义】act 会真的改变你在桌面腔室里的位置与姿态，只有在你确实想做动作时才调用：\n"
+    "- investigate：跟随用户的光标移动一段时间。\n"
+    "- talk：走到用户光标旁边、悬停在那里看着光标（不是「说话」；说话用 speak）。\n"
+    "- move_to：移动到屏幕腔室的指定位置，需提供归一化坐标 x, y（0.0~1.0，左上角为 0,0，"
+    "中心为 0.5,0.5，右下角为 1,1）。\n"
+    "- hold：在原地闭眼打坐、保持静止不动，需提供持续秒数 seconds（3~120）。\n"
+    "- look_at：待在原地不走，只把视线转向指定坐标 x, y（0.0~1.0）。\n"
+    "- sleep：在原地闭眼休眠、调暗光环（适合深夜或想休息时）。\n"
+    "- wake：从休眠或打坐中醒来，恢复平时的漫游。\n"
     "- tremble：起身、发光、散出电光，用于表达你对用户的强烈不满。\n"
-    "- idle：什么也不做，回到平时的漫游\n"
-    "玩家只是路过、你只想回一句时，用 speak，不要附带 act。"
+    "- idle：什么也不做，回到平时的漫游。\n"
+    "如果只想回一句话、不需要改变姿态或位置，只调用 speak，不要附带 act。"
 )
 
 _TOOL_SPEAK = {
@@ -53,12 +67,22 @@ _TOOL_SPEAK = {
 }
 _TOOL_ACT = {
     "name": "act",
-    "description": "做一个动作。只有确实符合情境时才调用。",
+    "description": "做一个动作（改变姿态、移动到某点或原地静止）。只有确实符合情境时才调用。",
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"enum": list(WHITELIST)},
-            "reason": {"type": "string"},
+            "action": {"type": "string", "enum": list(WHITELIST),
+                       "description": "要执行的动作名称。"},
+            "x": {"type": "number", "minimum": 0.0, "maximum": 1.0,
+                  "description": "目标水平位置（0.0=最左，0.5=居中，1.0=最右）。"
+                                 "仅 move_to / look_at 需要。"},
+            "y": {"type": "number", "minimum": 0.0, "maximum": 1.0,
+                  "description": "目标垂直位置（0.0=最上，0.5=居中，1.0=最下）。"
+                                 "仅 move_to / look_at 需要。"},
+            "seconds": {"type": "integer", "minimum": HOLD_MIN_S, "maximum": HOLD_MAX_S,
+                        "description": "原地静止不动（闭眼打坐）的持续秒数（3~120）。"
+                                       "仅 hold 需要。"},
+            "reason": {"type": "string", "description": "简短说明为什么做这个动作。"},
         },
         "required": ["action"],
     },
@@ -85,6 +109,9 @@ class ParsedReply:
     text: str = ""
     action: str = ""
     reason: str = ""
+    # 第三组起：动作的坐标/时长（`move_to` 的 x/y、`hold` 的 seconds）。
+    # 已由 `_clean_args` 夹好，状态层直接信它，别再各夹一次。
+    args: dict = dataclass_field(default_factory=dict)
 
 
 def _clean_action(value) -> str:
@@ -105,14 +132,42 @@ def _as_args(raw) -> dict:
     return {}
 
 
+def _clean_args(action: str, raw) -> dict:
+    """把模型给的参数收成"仿真能直接用"的形状（第三组）。
+
+    只有 ``COORD_ACTIONS`` 收 ``x/y``、``SECONDS_ACTIONS`` 收 ``seconds``；
+    其余字段一律丢。坐标夹到 0–1（归一化，与分辨率/腔室大小无关），秒数夹到
+    3–120。**非法值不报错、直接夹**：模型偶尔会把 `x` 写成 100 或字符串，
+    这时候"不动"比"抛异常"好——上面已经有闸门，不差这一个。
+    """
+    data = _as_args(raw)
+    cleaned: dict = {}
+    if action in COORD_ACTIONS:
+        for key in ("x", "y"):
+            try:
+                value = float(data.get(key))
+            except (TypeError, ValueError):
+                continue
+            cleaned[key] = max(0.0, min(1.0, value))
+    if action in SECONDS_ACTIONS:
+        try:
+            seconds = int(round(float(data.get("seconds"))))
+        except (TypeError, ValueError):
+            seconds = None
+        if seconds is not None:
+            cleaned["seconds"] = max(HOLD_MIN_S, min(HOLD_MAX_S, seconds))
+    return cleaned
+
+
 def parse_reply(payload, protocol: str = "openai") -> ParsedReply:
-    """从返回体里抽出 ``(文本, 动作, 理由)``。取不到文本不算错，交给上层判断。
+    """从返回体里抽出 ``(文本, 动作, 理由, 参数)``。取不到文本不算错，交给上层判断。
 
     两种协议 + 两种调用形态（``speak`` / ``act``）都在这里收口，别处不要再解析返回体。
     """
     text = ""
     action = ""
     reason = ""
+    action_args: dict = {}
     if not isinstance(payload, dict):
         return ParsedReply()
 
@@ -129,9 +184,13 @@ def parse_reply(payload, protocol: str = "openai") -> ParsedReply:
                 if block.get("name") == "speak" and isinstance(args.get("text"), str):
                     text = text or args["text"]
                 elif block.get("name") == "act":
-                    action = action or _clean_action(args.get("action"))
+                    name = _clean_action(args.get("action"))
+                    if name and not action:
+                        action = name
+                        action_args = _clean_args(name, args)
                     reason = reason or str(args.get("reason") or "")
-        return ParsedReply(text=text.strip(), action=action, reason=reason)
+        return ParsedReply(text=text.strip(), action=action, reason=reason,
+                           args=action_args)
 
     choices = payload.get("choices")
     if isinstance(choices, list) and choices and isinstance(choices[0], dict):
@@ -149,17 +208,22 @@ def parse_reply(payload, protocol: str = "openai") -> ParsedReply:
                 if name == "speak" and isinstance(args.get("text"), str):
                     text = text or args["text"]
                 elif name == "act":
-                    action = action or _clean_action(args.get("action"))
+                    name = _clean_action(args.get("action"))
+                    if name and not action:
+                        action = name
+                        action_args = _clean_args(name, args)
                     reason = reason or str(args.get("reason") or "")
         if not text and isinstance(choices[0].get("text"), str):
             text = choices[0]["text"]
-    return ParsedReply(text=text.strip(), action=action, reason=reason)
+    return ParsedReply(text=text.strip(), action=action, reason=reason,
+                       args=action_args)
 
 
 def parse_json_fallback(text: str) -> ParsedReply:
     """不支持 function calling 的模型（§3.4）：只认 ``{"action":…,"text":…}``。
 
-    严格到"只读这两个字段"，解析不出来就**只保留文本**（当普通台词）。
+    严格到"只读这几个字段"，解析不出来就**只保留文本**（当普通台词）。
+    第三组起同时认 ``x`` / ``y`` / ``seconds``，夹取规则与 ``_clean_args`` 同一份。
     """
     raw = (text or "").strip()
     if not raw:
@@ -181,7 +245,8 @@ def parse_json_fallback(text: str) -> ParsedReply:
     if not action and not spoken:
         return ParsedReply(text=raw)
     return ParsedReply(text=spoken.strip(), action=action,
-                       reason=str(data.get("reason") or ""))
+                       reason=str(data.get("reason") or ""),
+                       args=_clean_args(action, data) if action else {})
 
 
 @dataclass(frozen=True)
@@ -189,6 +254,7 @@ class Intent:
     action: str
     reason: str = ""
     at: float = 0.0            # 入队时刻（monotonic），用来判过期
+    args: dict = dataclass_field(default_factory=dict)   # move_to 的 x/y、hold 的 seconds
 
 
 class IntentQueue:
@@ -207,7 +273,8 @@ class IntentQueue:
         self.dropped = 0
         self.expired = 0
 
-    def push(self, action: str, reason: str = "", min_interval_s: float = 2.0) -> bool:
+    def push(self, action: str, reason: str = "", min_interval_s: float = 2.0,
+             args: dict | None = None) -> bool:
         name = _clean_action(action)
         if not name:
             self.dropped += 1
@@ -223,7 +290,7 @@ class IntentQueue:
             except queue.Empty:
                 break
         try:
-            self._slot.put_nowait(Intent(name, reason, now))
+            self._slot.put_nowait(Intent(name, reason, now, dict(args or {})))
         except queue.Full:                # pragma: no cover - maxsize=1 且已清空
             self.dropped += 1
             return False

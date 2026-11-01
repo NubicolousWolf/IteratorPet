@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 
 from . import actions as llm_actions
 from . import config as llm_config
@@ -50,6 +50,7 @@ class ChatResult:
     latency_s: float = 0.0
     action: str = ""          # LLM 要求的动作（白名单之一），空 = 这次只想说话
     action_reason: str = ""   # 模型给的理由，只进日志/面板，不驱动任何东西
+    action_args: dict = dataclass_field(default_factory=dict)  # move_to 的 x/y 等
 
 
 def clean_line(raw, limit: int = MAX_LINE_CHARS) -> str:
@@ -277,6 +278,7 @@ class LLMClient:
         return self._finish(ChatResult(
             True, text=text, status=200, latency_s=latency,
             action=parsed.action, action_reason=parsed.reason,
+            action_args=dict(getattr(parsed, "args", {}) or {}),
         ))
 
     def _payload(self, messages: list[dict], with_tools: bool) -> dict:

@@ -300,13 +300,15 @@ FRESHNESS_FLOOR = 0.35
 # 40 px up along its own body (``lookPoint = firstChunk.pos + new Vector2(0,-40)``).
 # The source walks to ``MiddleOfTile(24,17)`` first; the user (2026-10-31)
 # explicitly vetoed that -- "去掉移动到中心，就待在原地" -- so our destination is the
-# body's own position. The entry odds, the stay length and the 20 s "the cursor
+# body's own position. The entry odds, the stay length and the 30 min "the cursor
 # has been still" precondition are OURS; the 0.001/tick exit roll is the source's
 # (ss.cs:4147), i.e. a median stay of ~700 ticks (17 s) once it sits down.
 # Reported as ``status()["posture"]``, **not** as a fourth behaviour: the draw
 # weights in BEHAVIOUR_BASE were fitted against the user's "roaming 75 %" target
 # and adding a fourth roulette arm would silently move that number.
-MEDITATE_STILL_TICKS = 800        # 20 s of a motionless cursor before it may sit
+# 30 min, not 20 s（用户 2026-11-01："B1 的 20 秒触发太短了，改成半小时"）。
+# 40 TPS × 1800 s = 72000 tick。
+MEDITATE_STILL_TICKS = 72000      # 30 min of a motionless cursor before it may sit
 MEDITATE_ENTER_CHANCE = 1.0 / 300.0
 MEDITATE_EXIT_CHANCE = 0.001      # ss.cs:4147
 MEDITATE_MIN_TICKS = 200          # 5 s: never stands up instantly

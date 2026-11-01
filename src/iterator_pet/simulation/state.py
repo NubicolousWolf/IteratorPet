@@ -246,6 +246,9 @@ class SimulationState:
         self._meditate_age = 0
         self._meditate_anchor: tuple[float, float] | None = None
         self._idle_ticks = 0          # 连续无互动的 tick 数（空闲自语）
+        # 第三组：look_at 的"只看不走"（点, 剩余 tick）与它钉住的锚点
+        self._gaze_hold: tuple[tuple[float, float], int] | None = None
+        self._gaze_anchor: tuple[float, float] | None = None
         # 电脑状态（2026-11-01 第二组）：传感器 1 Hz 喂进来，映射在 world.py。
         # 默认 `valid=False` = 没采样过，一切维持原样。
         self.world = WorldState()
@@ -371,6 +374,8 @@ class SimulationState:
         if self.kill.blocked:
             return False
         self.wake_up()          # 被拎起来就别再打坐了（2026-11-01 打坐姿态层）
+        self._gaze_hold = None  # look_at 也当场作废：抓着她还盯着别处很怪
+        self._gaze_anchor = None
         self.drag_mode = mode
         self.drag_point = point
         if point is not None:
@@ -600,6 +605,29 @@ class SimulationState:
             self.intent_accepted += 1
             self.intent_last = "tremble"
             return True
+        # ---- 第三组：带参数的动作（2026-11-01）----------------------------
+        # 参数已经在 `llm_actions._clean_args` 夹过一遍（坐标 0–1、秒数 3–120），
+        # 这里直接信它；状态层只决定"现在能不能做"。
+        args = dict(getattr(intent, "args", {}) or {})
+        if action == "hold":
+            seconds = int(args.get("seconds", 30))
+            ok = self.enter_meditate(seconds * int(C.GAME_HZ))
+            self._record_intent(action, ok, f"{seconds}s")
+            return False
+        if action == "move_to":
+            ok = self.move_to(args.get("x", 0.5), args.get("y", 0.5))
+            self._record_intent(action, ok)
+            return False
+        if action == "look_at":
+            ok = self.look_at(args.get("x", 0.5), args.get("y", 0.5))
+            self._record_intent(action, ok)
+            return False
+        if action == "sleep":
+            self._record_intent(action, self.enter_sleep())
+            return False
+        if action == "wake":
+            self._record_intent(action, self.wake_up())
+            return False
         kind = llm_actions.BEHAVIOUR_OF.get(action)
         ticks = llm_actions.ACTION_TICKS.get(action, C.BEHAVIOUR_SEGMENT_TICKS["roaming"])
         if kind is None or not self.selector.force_segment(kind, ticks):
@@ -609,6 +637,51 @@ class SimulationState:
         self.intent_accepted += 1
         self.intent_last = action
         return False
+
+    def _record_intent(self, action: str, ok: bool, detail: str = "") -> None:
+        """记一笔动作账（面板/日志）。``ok=False`` 不算错，只是"这一刻做不了"。"""
+        if ok:
+            self.intent_accepted += 1
+            self.intent_last = action if not detail else f"{action} {detail}"
+        else:
+            self.intent_rejected += 1
+            self.intent_last = f"{action}: 当前状态拒绝"
+
+    def move_to(self, x_norm: float, y_norm: float) -> bool:
+        """``move_to``：归一化坐标 → 安全区里的一点，然后强制走一段。
+
+        夹取有两层：这里先按**安全区**归一化（0–1 与腔室大小/分辨率无关），
+        ``wander.set_destination`` 再按"底座当前够得着的圆"夹一次——那是既有
+        不变式（``_clamp_destination``），不绕过。
+        """
+        self.wake_up()
+        self._gaze_hold = None
+        self._gaze_anchor = None
+        x, y, w, h = self.wander._safe_rect()
+        point = (x + w * max(0.0, min(1.0, float(x_norm))),
+                 y + h * max(0.0, min(1.0, float(y_norm))))
+        self.wander.set_destination(point)
+        self._talk_point = None
+        self._talk_anchor = None
+        # 走的过程中别被抽签换成就地搭话：强切一段 roaming。
+        return self.selector.force_segment("roaming",
+                                           llm_actions.ACTION_TICKS.get("move_to", 600))
+
+    def look_at(self, x_norm: float, y_norm: float, ticks: int = 120) -> bool:
+        """``look_at``：**不挪窝**，只把视线转向一个点，3 s 后自动结束。
+
+        和打坐同一个坑：目标点每 tick 现读 ``chunk0`` 会被 chunk1 的悬垂项拖走
+        （0.24 px/tick），所以钉住一个锚点。
+        """
+        if self.dragging or self.kill.active:
+            return False
+        self.wake_up()
+        x, y, w, h = self._inset()
+        point = (x + w * max(0.0, min(1.0, float(x_norm))),
+                 y + h * max(0.0, min(1.0, float(y_norm))))
+        self._gaze_anchor = self.creature.chunk0
+        self._gaze_hold = (point, max(1, int(ticks)))
+        return True
 
     def _behaviour_targets(self) -> tuple[tuple[float, float], tuple[float, float]]:
         """本 tick 的 ``(get_to, look_point)``：三态姿态（源码形状）。
@@ -665,14 +738,18 @@ class SimulationState:
 
         源码 ``Meditate`` 会先走到 ``MiddleOfTile(24,17)``；用户 2026-10-31 明确
         否掉了这一步（"去掉移动到中心，就待在原地"），所以目标点就是身体当前位置。
+
+        ``ticks=None`` 走自然时长上限 ``MEDITATE_MAX_TICKS``（60 s）；**显式给了
+        时长就不夹到 60 s**——``hold`` 允许 120 s（第三组），夹了就等于模型说了
+        120 秒、她 60 秒就起来，而且没有任何提示。
         """
         if self.posture == "meditate":
             return False
         self.posture = "meditate"
         self._meditate_age = 0
         self._meditate_anchor = self.creature.chunk0
-        ceiling = C.MEDITATE_MAX_TICKS if ticks is None else max(1, int(ticks))
-        self.meditate_left = min(int(C.MEDITATE_MAX_TICKS), ceiling)
+        self.meditate_left = (int(C.MEDITATE_MAX_TICKS) if ticks is None
+                              else max(1, int(ticks)))
         self._talk_point = None
         self._talk_anchor = None
         return True
@@ -726,8 +803,8 @@ class SimulationState:
     def _step_posture(self) -> None:
         """每 tick：该不该坐下 / 睡着 / 起来。
 
-        打坐（B1）的进入条件全是我们自己定的：正在漫游、光标停满 20 s、身体已
-        站住，再乘一个 1/300 的骰子；深夜这个骰子 ×4（A4，源码构造时本来就有
+        打坐（B1）的进入条件全是我们自己定的：正在漫游、光标停满 **30 min**
+        （用户 2026-11-01 从 20 s 改过来）、身体已站住，再乘一个 1/300 的骰子；深夜这个骰子 ×4（A4，源码构造时本来就有
         50/50 抽 Meditate/Idle，`ss.cs:3170`）。退出条件是拖拽、到点、或源码那个
         0.001/tick（`ss.cs:4147`）。
 
@@ -963,15 +1040,21 @@ class SimulationState:
         # 状态就不再看玩家、只朝自己头顶看；我们的三态抽签是设计增补，所以
         # **打坐期间不抽签**，起来后照常从段末抽。
         self._step_posture()
+        # 打坐/休眠与 look_at 共用一个坑：目标点**不能每 tick 现读 chunk0**——
+        # 那等于"目标永远贴着自己"，而 creature.step 的 chunk1 悬垂项
+        # （get_to - get_to_dir * 9）会每 tick 把身体往下压 0.24 px（实测 3 s 漂
+        # 28.8 px、15 s 漂 143 px）。钉住"开始那一刻"的锚点后只是微振。
         if self.posture in ("meditate", "sleep"):
-            # 目标点是**坐下那一刻**的位置，不是每 tick 现读 chunk0：现读等于
-            # "目标永远贴着自己"，而 creature.step 的 chunk1 悬垂项
-            # （get_to - get_to_dir * 9）会每 tick 把身体往下压一点点，实测
-            # 0.24 px/tick（3 s 漂 28.8 px、15 s 漂 143 px）。钉住锚点后它只是
-            # 在锚点上下微振，这才是"待在原地"。
             get_to = self._meditate_anchor or self.creature.chunk0
             look_point = (self.creature.head[0],
                           self.creature.head[1] - C.MEDITATE_LOOK_UP)
+        elif self._gaze_hold is not None:
+            # look_at（第三组）：站在原地、只把视线转过去。同样钉住锚点，
+            # 否则 chunk1 的悬垂项会让"只看不走"变成"慢慢往下滑"。
+            point, left = self._gaze_hold
+            self._gaze_hold = (point, left - 1) if left > 1 else None
+            get_to = self._gaze_anchor or self.creature.chunk0
+            look_point = point
         else:
             get_to, look_point = self._behaviour_targets()
 
