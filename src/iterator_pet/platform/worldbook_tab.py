@@ -105,6 +105,17 @@ class WorldbookTab(QWidget):
         )
         self.fork_button.clicked.connect(self.fork_from_global)
         scope.addWidget(self.fork_button)
+        # 2026-11-01：对不上任何角色 key 的独立世界书（角色改名/手改文件名之后
+        # 就这样静默失效）。只在对**当前角色**还没有独立世界书时提示，一键迁过来。
+        self.orphan_button = QPushButton("")
+        self.orphan_button.setToolTip(
+            "worldbooks/ 里有一份对不上当前角色 key 的世界书（角色改过名？）。"
+            "点一下把它复制成当前角色的独立世界书。"
+        )
+        self.orphan_button.clicked.connect(self.migrate_orphan)
+        self.orphan_button.hide()
+        scope.addWidget(self.orphan_button)
+        self._orphan: Path | None = None
         outer.addLayout(scope)
 
         top = QHBoxLayout()
@@ -267,6 +278,48 @@ class WorldbookTab(QWidget):
         self.scope_box.setCurrentIndex(1 if on_own else 0)
         self.scope_box.blockSignals(False)
         self.fork_button.setEnabled(not exists)
+        self._refresh_orphan(exists)
+
+    def _refresh_orphan(self, own_exists: bool) -> None:
+        """没有独立那份时，看看有没有"对不上角色"的书可以迁过来。"""
+        self._orphan = None
+        if own_exists:
+            self.orphan_button.hide()
+            return
+        try:
+            from .. import characters as registry
+
+            known = [key for key, _label in registry.names()]
+        except Exception:                 # noqa: BLE001 —— 注册表坏了不该挡住世界书页
+            known = [self.character]
+        found = wb.orphans(known, self.folder)
+        if not found:
+            self.orphan_button.hide()
+            return
+        self._orphan = found[0]
+        self.orphan_button.setText(f"把 {found[0].name} 迁到「{self.character}」")
+        self.orphan_button.show()
+
+    def migrate_orphan(self) -> None:
+        """把 ``worldbooks/<别的key>.json`` 复制成当前角色的独立世界书。"""
+        source = self._orphan
+        target = self._own_path()
+        if source is None or not Path(source).is_file():
+            return
+        if target.is_file():
+            QMessageBox.information(
+                self, "已经有独立世界书",
+                f"worldbooks/{target.name} 已经存在了，直接编辑它就行。",
+            )
+            return
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # 复制文件而不是 load→save：玩家的缩进、未知键一点都不该变
+            shutil.copyfile(source, target)
+        except OSError as exc:
+            QMessageBox.warning(self, "迁移失败", f"{type(exc).__name__}: {exc}")
+            return
+        self._switch_book(target)
 
     def set_character(self, key: str) -> None:
         """换角色：重算作用域，并切到"她实际在用的那份"。

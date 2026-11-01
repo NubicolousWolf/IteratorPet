@@ -504,3 +504,45 @@ def test_adopt_session_does_not_carry_the_ritual_in_flight():
     assert new.dialogue.text == "", "气泡属于旧腔室，重建时收起"
     assert new.kill.phase == "idle", "不许留半个仪式"
 
+
+# ------------------------------------------------ 孤儿世界书（2026-11-01）--
+def test_worldbooks_that_match_no_character_are_reported(tmp_path):
+    """用户报"独立世界书没起作用"的真因：角色 key 变了，文件名对不上。
+
+    ``resolve_path`` 按设计回落到全局（老玩家零迁移），但"文件存在却没人读"这件事
+    必须能被**发现**，否则玩家只会看到"改了没生效"。
+    """
+    (tmp_path / "worldbooks").mkdir()
+    (tmp_path / "worldbooks" / "test_iterator.json").write_text("{}", "utf-8")
+    (tmp_path / "worldbooks" / "test.json").write_text("{}", "utf-8")
+
+    found = [path.name for path in wb.orphans(["test", "pebbles"], tmp_path)]
+    assert found == ["test_iterator.json"]
+    assert wb.orphans(["test_iterator", "test"], tmp_path) == []
+
+
+def test_the_worldbook_tab_offers_to_migrate_an_orphan_book(tmp_path):
+    """工坊里给"对不上的那份"一个一键迁移入口（复制而不是 load→save）。"""
+    from PySide6.QtWidgets import QApplication
+
+    from iterator_pet.platform.worldbook_tab import WorldbookTab
+
+    QApplication.instance() or QApplication([])
+    (tmp_path / "worldbooks").mkdir()
+    source = tmp_path / "worldbooks" / "test_iterator.json"
+    source.write_text('{"version": 1, "entries": []}', "utf-8")
+    global_book = tmp_path / "worldbook.json"
+    global_book.write_text('{"version": 1, "entries": []}', "utf-8")
+
+    tab = WorldbookTab(wb.Worldbook(path=global_book), folder=tmp_path,
+                       character="test")
+    assert tab._orphan == source, "没有独立那份时应该发现孤儿文件"
+    assert "test_iterator.json" in tab.orphan_button.text()
+
+    tab.migrate_orphan()
+    own = tmp_path / "worldbooks" / "test.json"
+    assert own.is_file(), "迁移必须复制到当前角色的 key"
+    assert own.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+    assert tab.book.path == own, "迁移完当场切过去，不用再点一次作用域"
+    tab.deleteLater()
+

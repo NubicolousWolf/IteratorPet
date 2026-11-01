@@ -433,3 +433,22 @@ def resolve_path(character: str, folder: Path | str | None = None) -> Path:
     """
     own = character_path(character, folder)
     return own if own.is_file() else global_path(folder)
+
+
+def orphans(known_keys, folder: Path | str | None = None) -> list[Path]:
+    """``worldbooks/`` 里**对不上任何角色 key** 的文件（按名字排序）。
+
+    2026-11-01 用户报"独立世界书似乎没起作用"：真因是角色 key 从
+    ``test_iterator`` 变成 ``test`` 之后，``worldbooks/test_iterator.json``
+    再也没人读，而界面/日志一句都不说——``resolve_path`` 按设计回落到全局，
+    看起来就是"改了没生效"。这里只负责**发现**；要不要迁移由工坊问玩家。
+    """
+    root = _base_folder(folder) / "worldbooks"
+    known = {str(key).strip().lower() for key in known_keys}
+    found: list[Path] = []
+    if not root.is_dir():
+        return found
+    for path in sorted(root.glob("*.json")):
+        if path.stem.lower() not in known:
+            found.append(path)
+    return found
