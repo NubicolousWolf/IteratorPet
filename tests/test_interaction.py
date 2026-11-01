@@ -44,6 +44,29 @@ def test_meditate_stays_where_she_is_and_closes_her_eyes():
     assert sim.interpolate(1.0).behaviour in C.BEHAVIOURS, "打坐不进三态抽签"
 
 
+def test_she_sits_down_only_after_thirty_minutes_of_a_still_cursor():
+    """用户 2026-11-01 两次要求：20 秒太短，改成 **30 分钟**。
+
+    这条把**数字**和**行为**一起钉住：
+    ① 常数必须是 30 min（40 TPS × 1800 s），别人改小它这条就红；
+    ② 光标停 20 秒她不许坐下；够 30 分钟才坐（骰子用 0.0 强制"必中"，
+       否则测的是运气）。
+    """
+    assert C.MEDITATE_STILL_TICKS == 30 * 60 * int(C.GAME_HZ)
+
+    sim = SimulationState(BOUNDS, warmup=0)
+    sim.set_cursor((sim.creature.chunk0[0] + 120.0, sim.creature.chunk0[1]))
+    sim.rng.random = lambda: 0.0          # 骰子必中：只测门槛，不测概率
+    sim.selector.still_ticks = 20 * int(C.GAME_HZ)
+    for _ in range(200):
+        sim.step(GAME_DT)
+    assert sim.status()["posture"] == "", "光标停 20 秒不许坐下（旧行为）"
+
+    sim.selector.still_ticks = C.MEDITATE_STILL_TICKS
+    sim.step(GAME_DT)
+    assert sim.status()["posture"] == "meditate", "够 30 分钟才坐"
+
+
 def test_waking_up_opens_the_eyes_again():
     sim = _warm()
     sim.enter_meditate()

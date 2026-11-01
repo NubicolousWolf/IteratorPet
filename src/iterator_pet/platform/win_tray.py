@@ -201,10 +201,14 @@ class _TrayFilter(QAbstractNativeEventFilter):
             msg = wt.MSG.from_address(int(message))
         except Exception:
             return False, 0
-        if int(msg.hWnd) != self.tray._hwnd:
+        # 线程消息（PostThreadMessage / 广播）的 hWnd 是 NULL，ctypes 读到 None。
+        # 2026-11-01 修：以前直接 int(msg.hWnd)，每来一条 NULL 消息就在 stderr 刷
+        # 一个 TypeError（日志里能刷几十行），而它本来只是"不是我的消息"。
+        hwnd = msg.hWnd
+        if hwnd is None or int(hwnd) != self.tray._hwnd:
             return False, 0
         if msg.message == WM_TRAYICON:
-            self.tray._on_message(int(msg.lParam))
+            self.tray._on_message(int(msg.lParam or 0))
             return True, 0
         created = type(self).TASKBAR_CREATED
         if created and msg.message == created:
