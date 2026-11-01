@@ -44,6 +44,7 @@ EVENTS = (
     ("startup", "启动时"),
     ("poke", "戳一下"),
     ("idle_talk", "空闲自语"),
+    ("low_battery", "低电量"),
 )
 SILENT = C.DIALOGUE_SILENT_ENTRY
 

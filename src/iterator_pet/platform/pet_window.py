@@ -102,6 +102,12 @@ class PetWindow(PetCanvas):
         # 启动问候（2026-11-01 第一组 B4）：排一句 startup，仿真在下一 tick 说。
         # 放在窗口层而不是 SimulationState.__init__：测试里上百次构造不该冒出一句话。
         self.simulation.announce_startup()
+        # 电脑状态采样（2026-11-01 第二组）：1 Hz 喂给仿真，映射在 simulation/world.py。
+        # 采样放在窗口层而不是仿真里：仿真要能在没有 Windows API 的测试里跑。
+        self._world_timer = QTimer(self)
+        self._world_timer.timeout.connect(self.sample_world)
+        self._world_timer.start(1000)
+        self.sample_world()
         self.click_through = bool(config.click_through)
         self._paused = False
         self._press_global = None
@@ -310,6 +316,22 @@ class PetWindow(PetCanvas):
         """调试入口：把心情直接拉到闸值以下，下一 tick 就会强制打断并进仪式。"""
         from ..simulation import constants as C
         self.simulation.temper.value = C.TEMPER_KILL_GATE - 0.01
+
+    def sample_world(self) -> None:
+        """采一帧电脑状态喂给仿真（1 Hz）。采样失败时 ``valid=False``，仿真会慢慢回弹。"""
+        from . import sensors
+
+        world = sensors.sample()
+        self.simulation.observe_world(
+            world,
+            reflect_memory=bool(getattr(self.config, "halo_memory_reflect", False)),
+        )
+
+    def toggle_memory_bits(self, checked: bool) -> None:
+        """A2 开关：光环上浮现的 MemoryBit 数量跟随内存占用（默认关）。"""
+        self.config.halo_memory_reflect = bool(checked)
+        save(self.config)
+        self.sample_world()
 
     # -- size ---------------------------------------------------------------
     @property
@@ -796,6 +818,13 @@ class PetWindow(PetCanvas):
                 lambda _checked=False, name=key: self.set_spark_rate(name)
             )
             spark_menu.addAction(action_rate)
+
+        # A2（2026-11-01 第二组）：用户 2026-10-31 要的"开关"。默认关。
+        action_memory = QAction("光环记忆位随内存", menu)
+        action_memory.setCheckable(True)
+        action_memory.setChecked(bool(getattr(self.config, "halo_memory_reflect", False)))
+        action_memory.triggered.connect(self.toggle_memory_bits)
+        menu.addAction(action_memory)
 
         character_menu = menu.addMenu("当前角色")
         for key, label in self.character_list():

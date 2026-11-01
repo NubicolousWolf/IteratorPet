@@ -144,6 +144,13 @@ def tray_menu(window, on_dev_panel=None) -> QMenu:
         )
         spark_menu.addAction(action_rate)
 
+    # A2（2026-11-01 第二组）：用户 2026-10-31 要的开关，默认关
+    action_memory = QAction("光环记忆位随内存", menu)
+    action_memory.setCheckable(True)
+    action_memory.setChecked(bool(getattr(window.config, "halo_memory_reflect", False)))
+    action_memory.triggered.connect(window.toggle_memory_bits)
+    menu.addAction(action_memory)
+
     character_menu = menu.addMenu("当前角色")
     current_character = getattr(window, "character", "pebbles")
     # 现扫注册表：玩家可能刚在工作室里新建/删掉一个角色（v0.2.0）

@@ -131,6 +131,10 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
     push = state.halo_push
     white = state.halo_white
     gain = max(1.0, state.halo_gain)
+    # 2026-11-01 第二组：环/bit/电光的**整体亮度**。CPU 被别的重负载占满时她
+    # 主动收敛（0.45），深夜 0.8，低电量再乘一档；`halo_gain` 那条是"杀鼠标时
+    # 变亮"的（渲染层 clamp 到 >=1），两者不能共用。
+    dim = max(0.05, min(1.0, state.halo_dim))
 
     painter.save()
     painter.setPen(Qt.PenStyle.NoPen)
@@ -156,8 +160,9 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
         return QBrush(grad)
 
     ring_zero = (C.HALO_RADIUS_BASE + push) * expand * 10.0
-    ring_brush = _gradient(ring_zero, 1.0)
-    bit_brush = _gradient((C.HALO_RADIUS_BASE + 3.0 + push) * expand * 10.0, C.HALO_BIT_DIM)
+    ring_brush = _gradient(ring_zero, dim)
+    bit_brush = _gradient((C.HALO_RADIUS_BASE + 3.0 + push) * expand * 10.0,
+                          C.HALO_BIT_DIM * dim)
 
     # 0. 电光（20 根，画在**最底层**：被环和 bit 盖住，看起来是从光环内部伸出来的）：源码 `Bezier(stuckAt, handle, center+dir·Radius(2), center+dir·400)`。
     #    桌面端按用户 2026-10-28 的三条意见调整（源码数字见 docs/PLAN-halo.md §2.8）：
@@ -173,7 +178,7 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
         min(255, int(state.appearance.halo_spark[0] * gain)),
         min(255, int(state.appearance.halo_spark[1] * gain)),
         min(255, int(state.appearance.halo_spark[2] * gain)),
-        int(255 * C.HALO_OPACITY),
+        int(255 * C.HALO_OPACITY * dim),
     )
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QBrush(spark_colour))
@@ -266,7 +271,11 @@ def draw_halo(painter: QPainter, state: RenderState) -> None:
         painter.setBrush(bit_brush)
         for index in range(count):
             fill = state.halo_fill[offset + index] if offset + index < len(state.halo_fill) else 0.0
+            global_index = offset + index
             offset += 1
+            # A2（默认关）：`halo_bits >= 0` 时只画前 N 个记忆位，按内存占用浮现。
+            if state.halo_bits >= 0 and global_index >= state.halo_bits:
+                continue
             length = C.HALO_BIT_LENGTH * fill
             if length <= 0.05:
                 continue

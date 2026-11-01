@@ -161,5 +161,5 @@ def test_the_dialogue_tab_offers_the_three_new_events(tmp_path):
 
     tab = DialogueTab(Lines(path=tmp_path / "lines.json"))
     labels = [tab.event_box.itemText(i) for i in range(tab.event_box.count())]
-    assert labels == ["拖拽", "长时间静止", "仪式", "启动时", "戳一下", "空闲自语"]
+    assert labels == ["拖拽", "长时间静止", "仪式", "启动时", "戳一下", "空闲自语", "低电量"]
     tab.deleteLater()

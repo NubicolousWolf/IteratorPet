@@ -30,6 +30,7 @@ from .cord import Cord
 from .creature import Creature
 from .ornament import Gown, Halo
 from .rail import RailPath, move_towards_angle
+from .world import WorldReactions, WorldState
 
 
 def mix_scalar(a: float, b: float, alpha: float) -> float:
@@ -75,6 +76,10 @@ class RenderState:
     # （ss.cs:3153），渲染层据此把眼睛画成 1 px 细线（og.cs:1869 的 eyesOpen=0）。
     # 不插值：睁/闭是二值，跨帧混出一个 1.5 px 的"半睁"只会像糊了。
     eyes_closed: bool = False
+    # 电脑状态（2026-11-01 第二组）：亮度倍率与可见的 MemoryBit 数量。
+    # `halo_bits = -1` 表示全部 100 位（A2 的开关关掉时的默认），渲染层据此截断。
+    halo_dim: float = 1.0
+    halo_bits: int = -1
     # 腔室矩形（仿真像素）。渲染层拿它把活塞截到腔室里（游戏里墙紧贴轨道，活塞压在
     # 墙前看不出问题；桌面上屏幕外什么都没有，被窗口裁掉就是硬切口）。肘点**不**夹：
     # 2026-10-27 的翻肘护栏会让肘点单 tick 跳 ~196 px，已整个拆掉。
@@ -141,6 +146,8 @@ class RenderState:
             cursor=other.cursor,
             behaviour=other.behaviour,
             eyes_closed=other.eyes_closed,
+            halo_dim=other.halo_dim,
+            halo_bits=other.halo_bits,
             time=other.time,
             ticks=other.ticks,
             bounds=other.bounds,
@@ -239,6 +246,10 @@ class SimulationState:
         self._meditate_age = 0
         self._meditate_anchor: tuple[float, float] | None = None
         self._idle_ticks = 0          # 连续无互动的 tick 数（空闲自语）
+        # 电脑状态（2026-11-01 第二组）：传感器 1 Hz 喂进来，映射在 world.py。
+        # 默认 `valid=False` = 没采样过，一切维持原样。
+        self.world = WorldState()
+        self.reactions = WorldReactions()
         self.cursor: tuple[float, float] | None = None
         self.time = 0.0
         self.ticks = 0
@@ -667,8 +678,8 @@ class SimulationState:
         return True
 
     def wake_up(self) -> bool:
-        """从打坐里起来。返回是否真的醒着（本来就醒着 → False）。"""
-        if self.posture != "meditate":
+        """从打坐/休眠里起来。返回是否真的醒着（本来就醒着 → False）。"""
+        if not self.posture:
             return False
         self.posture = ""
         self.meditate_left = 0
@@ -676,19 +687,60 @@ class SimulationState:
         self._meditate_anchor = None
         return True
 
+    def enter_sleep(self) -> bool:
+        """睡着（A5/B5）：复用打坐的"原地 + 闭眼"，只是不自己醒来。"""
+        if self.posture:
+            return False
+        self.posture = "sleep"
+        self._meditate_age = 0
+        self.meditate_left = 0
+        self._meditate_anchor = self.creature.chunk0
+        self._talk_point = None
+        self._talk_anchor = None
+        return True
+
     @property
     def meditating(self) -> bool:
         return self.posture == "meditate"
 
-    def _step_meditate(self) -> None:
-        """每 tick：该不该坐下 / 该不该起来。
+    @property
+    def sleeping(self) -> bool:
+        return self.posture == "sleep"
 
-        进入条件（全是我们自己定的）：正在漫游、光标停满 20 s、身体已站住，
-        再乘一个 1/300 的骰子。退出条件：拖拽、到点、或源码那个 0.001/tick
-        （ss.cs:4147）——最短坐 5 s，免得一坐下就被骰子赶起来。
+    def observe_world(self, world: WorldState, reflect_memory: bool = False) -> None:
+        """传感器一帧（1 Hz，第二组）。只改亮度/电光/姿态/事件，**不动位置**。
+
+        用户 2026-10-31 对 A1 的修正：CPU 满载时她**主动收敛**——调暗光环、
+        关掉电光，而不是更亮。A2 的光环记忆位只在开关打开时才有映射。
+        """
+        self.world = world
+        self.reactions.update(world, reflect_memory=reflect_memory)
+        self.halo.spark_scale = self.reactions.sparks
+        if self.reactions.take_low_battery():
+            self.events.push("low_battery")
+        if self.posture == "sleep" and self.reactions.wake_signal:
+            self.wake_up()
+        # 全屏（游戏/视频）时她闭嘴：抽签照常，只是不主动搭话，也不自言自语。
+        self.selector.quiet = self.reactions.quiet
+
+    def _step_posture(self) -> None:
+        """每 tick：该不该坐下 / 睡着 / 起来。
+
+        打坐（B1）的进入条件全是我们自己定的：正在漫游、光标停满 20 s、身体已
+        站住，再乘一个 1/300 的骰子；深夜这个骰子 ×4（A4，源码构造时本来就有
+        50/50 抽 Meditate/Idle，`ss.cs:3170`）。退出条件是拖拽、到点、或源码那个
+        0.001/tick（`ss.cs:4147`）。
+
+        休眠（A5/B5）由传感器决定：很久没输入、或者深夜人明显不在。睡着后**只**
+        由"输入回来了"唤醒（外加戳/拖拽），不再掷骰子——睡着了还自己翻身很怪。
         """
         if self.dragging:
             self.wake_up()
+            return
+        if self.posture == "sleep":
+            self._meditate_age += 1
+            if self.reactions.wake_signal:
+                self.wake_up()
             return
         if self.posture == "meditate":
             self._meditate_age += 1
@@ -700,13 +752,18 @@ class SimulationState:
                     or self.rng.random() < C.MEDITATE_EXIT_CHANCE):
                 self.wake_up()
             return
+        # 人走了够久就先睡，不用先坐一坐。
+        if self.reactions.sleep_wanted and self.behaviour == "roaming":
+            self.enter_sleep()
+            return
         # 光标一动就重新计时；抽签的门槛由选择器自己的 still_ticks 提供。
         if self.cursor_speed > C.SCORE_MOTION_MIN:
             return
         if (self.behaviour == "roaming"
                 and self.selector.still_ticks >= C.MEDITATE_STILL_TICKS
                 and self.last_body_speed < C.WANDER_SETTLED_SPEED
-                and self.rng.random() < C.MEDITATE_ENTER_CHANCE):
+                and self.rng.random() < (C.MEDITATE_ENTER_CHANCE
+                                         * self.reactions.meditate_gain())):
             self.enter_meditate()
 
     def _reset_idle(self) -> None:
@@ -738,6 +795,8 @@ class SimulationState:
             return "仪式中"
         if self.dragging:
             return "被你拎着"
+        if self.posture == "sleep":
+            return "休眠中"
         if self.posture == "meditate":
             return "打坐中"
         if self.behaviour == "talk":
@@ -903,8 +962,8 @@ class SimulationState:
         # 源码里 Meditate 是 movementBehavior 的一个取值（ss.cs:4145），进了这个
         # 状态就不再看玩家、只朝自己头顶看；我们的三态抽签是设计增补，所以
         # **打坐期间不抽签**，起来后照常从段末抽。
-        self._step_meditate()
-        if self.posture == "meditate":
+        self._step_posture()
+        if self.posture in ("meditate", "sleep"):
             # 目标点是**坐下那一刻**的位置，不是每 tick 现读 chunk0：现读等于
             # "目标永远贴着自己"，而 creature.step 的 chunk1 悬垂项
             # （get_to - get_to_dir * 9）会每 tick 把身体往下压一点点，实测
@@ -1148,7 +1207,9 @@ class SimulationState:
             kill_flash=self.kill.flash_progress,
             cursor=self.cursor,
             behaviour=self.behaviour,
-            eyes_closed=self.posture == "meditate",
+            eyes_closed=self.posture in ("meditate", "sleep"),
+            halo_dim=self.reactions.dim,
+            halo_bits=self.reactions.bits,
             time=self.time,
             ticks=self.ticks,
             bounds=self._bounds,
@@ -1203,6 +1264,7 @@ class SimulationState:
                     fired,
                     last_line=self.last_spoken,
                     mood=self.behaviour,
+                    system_state=self._world_line(),
                 )
             if not asked:
                 self._say(self.lines.next_line(self.appearance.key, fired))
@@ -1214,7 +1276,12 @@ class SimulationState:
         计时器在这里而不是在 ``events`` 里：``events`` 只管"这一 tick 说哪句"，
         而"多久算久"是仿真层的状态。仪式进行中不算空闲（那本来就是互动），
         也不会在仪式里插一句自言自语。
+
+        全屏（A6）时**冻结**计时而不是清零：你打完游戏回来不该再等 20 分钟，
+        但也不该在你正打游戏时突然冒一句。
         """
+        if self.reactions.quiet:
+            return
         if interacting:
             self._reset_idle()
             return
@@ -1222,6 +1289,25 @@ class SimulationState:
         if self._idle_ticks >= C.DIALOGUE_IDLE_COOLDOWN:
             self._reset_idle()
             self.events.push("idle_talk")
+
+    def _world_line(self) -> str:
+        """给 LLM 的"环境感知"一句（空串 = 不提）。只在真的触发时拼，别刷噪音。"""
+        reactions = self.reactions
+        parts: list[str] = []
+        if reactions.cpu_high:
+            parts.append("这台计算机的处理器正被其他重负载占用，"
+                         "你已主动调暗光环、关闭电光以收敛自身算力消耗")
+        if reactions.reflect_memory and self.world.mem_pct >= 0.8:
+            parts.append(f"计算机内存占用较高（{int(self.world.mem_pct * 100.0)}%），"
+                         "你光环上的记忆位密集浮现")
+        battery = self.world.battery_pct
+        if (battery is not None and not self.world.on_ac
+                and battery <= C.WORLD_BATTERY_LOW):
+            parts.append(f"计算机电池余量仅 {int(battery * 100.0)}%（未接电源），"
+                         "你已调暗光环节省电力")
+        if reactions.night:
+            parts.append("现在是深夜，四周很安静")
+        return "；".join(parts)
 
     def _say(self, line: str | None) -> None:
         """说一句（``None`` / 空串 = 这次不说话）。顺手记下"上一句"。"""
@@ -1308,6 +1394,11 @@ class SimulationState:
             "meditate_left": self.meditate_left,
             "idle_ticks": self._idle_ticks,
             "tray_status": self.tray_status(),
+            # 第二组：传感器读数 + 她据此收敛到什么程度（面板/测试都读这一份）
+            "world": {
+                "state": self.world.status(),
+                "reactions": self.reactions.status(),
+            },
             "drag": self.drag_mode,
             "temper": round(self.temper.value, 4),
             "kill": {"phase": self.kill.phase, "fac": round(self.kill.kill_fac, 4),

@@ -40,10 +40,14 @@ OUTPUT_CONTRACT = (
 TAIL_MARGIN_TOKENS = 200
 
 EVENT_LABEL = {
+    "startup": "桌宠程序刚刚启动，你刚在用户的桌面上醒来。",
     "talk": "用户的光标有一段时间没有移动了，你决定去看看。",
-    "drag": "用户正在拖拽你。",
+    "drag": "用户正在用鼠标拖拽你。",
+    "poke": "用户用鼠标轻轻戳了你一下。",
     "ritual": "你刚以某种方式表达了对用户的不满。",
     "file": "用户把一个文件拿给你看。",
+    "idle_talk": "已经过去很久没有任何互动了，你在房间里自言自语，或主动向用户搭话。",
+    "low_battery": "你感知到这台计算机的电池电量很低，算力即将受限。",
 }
 
 
@@ -193,6 +197,9 @@ class Situation:
     mood: str = ""
     distance: str = ""
     time_text: str = ""
+    # 2026-11-01 第二组：电脑状态（CPU 高占用收敛 / 内存高 / 低电量 / 深夜）。
+    # 平时是空串，**只有触发条件时**才拼一句，免得每句话都带着环境噪音。
+    system_state: str = ""
     last_line: str = ""
     filename: str = ""
 
@@ -204,6 +211,8 @@ class Situation:
             lines.append(f"距离：{self.distance}。")
         if self.time_text:
             lines.append(f"时间：{self.time_text}。")
+        if self.system_state:
+            lines.append(f"环境感知：{self.system_state}。")
         if self.last_line:
             lines.append(f"你上一次说的是：「{self.last_line}」。")
         if self.filename:

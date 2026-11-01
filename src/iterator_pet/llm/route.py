@@ -127,12 +127,13 @@ class LLMRouter:
 
     # -- 主线程：发一个请求 --------------------------------------------------
     def request(self, event: str, *, last_line: str = "", mood: str = "",
-                distance: str = "") -> bool:
+                distance: str = "", system_state: str = "") -> bool:
         """能不能用 LLM 说话。返回 ``False`` 表示调用方照旧抽本地池。"""
         if not self.enabled or self.busy:
             return False
         situation = llm_prompt.Situation(
-            event=event, mood=mood, distance=distance, last_line=last_line
+            event=event, mood=mood, distance=distance, last_line=last_line,
+            system_state=system_state,
         )
         assembled = llm_prompt.assemble(
             self.card,

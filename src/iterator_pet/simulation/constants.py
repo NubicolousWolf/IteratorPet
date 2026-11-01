@@ -312,6 +312,31 @@ MEDITATE_EXIT_CHANCE = 0.001      # ss.cs:4147
 MEDITATE_MIN_TICKS = 200          # 5 s: never stands up instantly
 MEDITATE_MAX_TICKS = 2400         # 60 s ceiling; the 0.001 roll usually ends it
 MEDITATE_LOOK_UP = 40.0           # ss.cs:4152
+# ------------------------------------------------- 电脑状态感知（第二组）----
+# A1：处理器被别的重负载占满时，她**主动收敛**自己的算力（用户 2026-10-31：
+# "往反方向改……降低光环亮度、关闭电光，传达迭代器知道计算机正在被什么占用
+# 计算资源，因此主动收敛自己的资源占用"）。源码没有 CPU 概念，阈值、EMA、
+# 滞回全是我们定的（"借壳"：借的是 `halo.connectionsFireChance` 这个真变量）。
+WORLD_CPU_HIGH = 0.70          # 进入"算力收敛"
+WORLD_CPU_LOW = 0.55           # 退出（滞回，免得在 70 % 门口来回抖）
+WORLD_CPU_SMOOTH = 0.25        # 1 Hz 采样，4 帧跟到 ~90 %
+WORLD_DIM_CPU = 0.45           # 收敛时环/bit/电光的亮度倍率
+WORLD_DIM_BATTERY = 0.55
+WORLD_DIM_NIGHT = 0.80
+WORLD_SPARKS_CPU = 0.0         # 收敛时电光**全关**（用户 2026-10-31）
+WORLD_SPARKS_NIGHT = 0.35
+WORLD_BATTERY_LOW = 0.20
+WORLD_BATTERY_RECOVER = 0.25   # 回到这以上才允许下一次低电量提醒
+# A2：光环的 100 个 bit 在源码里就叫 `MemoryBit`（og.cs:419-750）。内存占用高时
+# 更多记忆位浮现；**默认关闭**（用户 2026-10-31："很有意思的设计，但要加个开关"）。
+WORLD_MEM_BITS_MIN = 0.35      # 空载也留 35 % 的位，否则光环会秃
+WORLD_NIGHT_START = 23         # 深夜：23:00–06:00
+WORLD_NIGHT_END = 6
+WORLD_MEDITATE_NIGHT_GAIN = 4.0   # 深夜打坐的骰子 ×4
+# A5/B5 休眠：多久没人碰算睡着。用户没给数，先与空闲自语同档（20 min）。
+WORLD_SLEEP_AFTER_S = 1200.0
+WORLD_WAKE_IDLE_S = 2.0        # 输入恢复这么多秒内就醒
+
 # ss.cs:4174-4204  Investigate: player.DangerPos + DegToVec(angle) * 150f, with
 # the angle kept inside (-70, 70) and swept at 0.4-0.8 deg/tick, random sign.
 INVESTIGATE_RADIUS = 150.0
@@ -722,6 +747,7 @@ DEFAULT_LINES = {
             "startup": ["……连接已建立。别打扰我工作。", "又是你。"],
             "poke": ["别戳。", "有事就说，别动手动脚。"],
             "idle_talk": ["……算力还有很多富余。", "还在那里吗？"],
+            "low_battery": ["电快用完了。去插上。", "……能源不足，我要降一档。"],
         },
         "past_moon": {
             "drag": ["怎么了？", "请不要打扰我。", "（不触发对话）", "我在这里。怎么了？"],
@@ -730,6 +756,7 @@ DEFAULT_LINES = {
             "startup": ["你好，小家伙。今天也来看看吗？", "系统刚恢复……很高兴见到你。"],
             "poke": ["嗯？怎么了？", "我在呢。"],
             "idle_talk": ["外面今天安静吗？", "坐久了，稍微歇一会儿吧。"],
+            "low_battery": ["电量不多了，记得充电。", "我先省着用一点。"],
         },
     },
 }

@@ -232,6 +232,9 @@ class BehaviourSelector:
         # LLM 动作强切的剩余 tick：>0 时 choose() 不改写 behaviour（段末照常回抽签）
         self.forced = 0
         self.still_ticks = 0
+        # 2026-11-01 第二组 A6：全屏（游戏/视频）时"安静"——不主动搭话。
+        # 只关 talk 的闸门，不关 investigate/roaming：她还在看你，只是不说话。
+        self.quiet = False
         self._last_cursor: tuple[float, float] | None = None
         # Freshness: 1 = keen, 0 = fed up. Decays while the mood is active,
         # recovers while it is not, and multiplies that mood's draw weight.
@@ -293,7 +296,8 @@ class BehaviourSelector:
             # to inspect; it is something to talk at.
             return cursor_speed > C.SCORE_MOTION_MIN
         # talk
-        return (cursor_speed <= C.SCORE_MOTION_MIN
+        return (not self.quiet
+                and cursor_speed <= C.SCORE_MOTION_MIN
                 and self.talk_cooldown <= 0
                 and C.dist(body, cursor) <= C.SCORE_TALK_RANGE)
 

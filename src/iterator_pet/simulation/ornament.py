@@ -220,6 +220,10 @@ class Halo:
         self.conscious = True
         # 电光频率倍数（off=0 / eco=1 / computing=1.5）
         self.spark_rate = C.HALO_SPARK_RATES[C.HALO_SPARK_DEFAULT_RATE]
+        # 2026-11-01 第二组 A1：用户的档位之上再乘一个"环境"倍数。CPU 被别的
+        # 重负载占满时她主动收敛 → 0.0（电光全关）；深夜 → 0.35。**不改用户的
+        # spark_rate**，所以设置页里选的值永远还在。
+        self.spark_scale = 1.0
 
     # -- 构造期采样 --------------------------------------------------------
     def _random_unit(self) -> tuple[float, float]:
@@ -271,7 +275,8 @@ class Halo:
         conscious = self.conscious if conscious is None else conscious
 
         # 1. 电光：先归档 last、再乘衰减、最后按概率开火（Consious 只门控开火这一行）
-        chance = self.connections_fire_chance / C.HALO_SPARK_FIRE_DIVISOR * self.spark_rate
+        chance = (self.connections_fire_chance / C.HALO_SPARK_FIRE_DIVISOR
+                  * self.spark_rate * self.spark_scale)
         for connection in self.connections:
             connection.last_light_up = connection.light_up
             connection.light_up *= C.HALO_SPARK_DECAY
