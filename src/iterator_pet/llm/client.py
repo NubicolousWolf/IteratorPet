@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, field as dataclass_field
@@ -53,6 +54,15 @@ class ChatResult:
     action_args: dict = dataclass_field(default_factory=dict)  # move_to 的 x/y 等
 
 
+def _snippet(body, limit: int = 220) -> str:
+    """模型返回体的短摘要（只进"为什么失败"的原因，不落盘、不写日志文件）。"""
+    try:
+        raw = json.dumps(body, ensure_ascii=False)
+    except (TypeError, ValueError):
+        raw = str(body)
+    return raw if len(raw) <= limit else raw[:limit] + "…"
+
+
 def clean_line(raw, limit: int = MAX_LINE_CHARS) -> str:
     """把模型输出收成"一句能进气泡的话"。空字符串 = 这次不说话。
 
@@ -75,7 +85,14 @@ def clean_line(raw, limit: int = MAX_LINE_CHARS) -> str:
     text = text.strip().strip(_QUOTES).strip()
     text = _SPACES.sub(" ", text)
     if not text:
-        return ""
+        # 整句都是舞台提示（"（她闭上眼睛。）"）：与其当"空回复"丢掉，不如原样
+        # 显示——至少玩家看到她做了什么。2026-11-01 实测："要求闭眼 → 空回复"
+        # 有一半是这条规则把唯一的一句洗没了。
+        kept = _SPACES.sub(" ", raw).strip()
+        kept = _NAME_PREFIX.sub("", kept).strip().strip(_QUOTES).strip()
+        if not kept:
+            return ""
+        text = kept
     if len(text) > limit:
         text = text[: max(1, limit - 1)].rstrip() + "…"
     return text
@@ -273,7 +290,16 @@ class LLMClient:
         text = clean_line(parsed.text)
         if not text and not parsed.action:
             self.breaker.record(False)
-            return self._finish(ChatResult(False, reason="回复清洗后是空的", latency_s=latency))
+            # 2026-11-01：把**模型原样返回了什么**带进原因里。玩家报"空回复"时，
+            # 只有这个片段能区分"模型真的什么都没说"和"我们没接住"（围栏 JSON /
+            # 未知工具名 / 只有舞台提示被 clean_line 洗掉）。
+            return self._finish(ChatResult(
+                False,
+                reason=f"回复清洗后是空的（原始返回：{_snippet(body)}）",
+                latency_s=latency,
+                action=parsed.action,
+                action_args=dict(getattr(parsed, "args", {}) or {}),
+            ))
         self.breaker.record(True)
         return self._finish(ChatResult(
             True, text=text, status=200, latency_s=latency,

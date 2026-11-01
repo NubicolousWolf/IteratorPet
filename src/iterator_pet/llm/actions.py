@@ -118,8 +118,21 @@ class ParsedReply:
     args: dict = dataclass_field(default_factory=dict)
 
 
+#: 模型自己发明动作名的同义词表（2026-11-01 实测："闭眼" 被叫成 close_eyes /
+#: meditate / rest）。**只做同义映射，不扩白名单**：映射后仍然要过 WHITELIST。
+ACTION_ALIASES = {
+    "meditate": "hold", "close_eyes": "hold", "close_eye": "hold",
+    "eyes_closed": "hold", "rest": "hold", "sit": "hold", "hold_still": "hold",
+    "move": "move_to", "goto": "move_to", "go_to": "move_to",
+    "walk_to": "move_to", "walk": "move_to",
+    "look": "look_at", "watch": "look_at", "look_towards": "look_at",
+    "wake_up": "wake", "sleep_mode": "sleep", "nap": "sleep",
+}
+
+
 def _clean_action(value) -> str:
     name = str(value or "").strip().lower()
+    name = ACTION_ALIASES.get(name, name)
     return name if name in WHITELIST else ""
 
 

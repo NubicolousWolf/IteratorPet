@@ -618,7 +618,12 @@ class SimulationState:
             self._record_intent(action, ok, f"{seconds}s")
             return False
         if action == "move_to":
-            x, y = args.get("x", 0.5), args.get("y", 0.5)
+            if "x" not in args or "y" not in args:
+                # 缺坐标就**别动**：以前默认 (0.5, 0.5) = 腔室中心，人偶恰好在附近
+                # 时看起来就是"进了队列却没动"。现在明确记一笔，面板能看见。
+                self._record_intent(action, False, "缺坐标 x/y")
+                return False
+            x, y = args["x"], args["y"]
             ok = self.move_to(x, y)
             # 面板/日志里带上目标：模型把坐标写成 px（800, 400）时会被夹成 1.0,
             # 这时"没动"和"目标就在脚下"长得一样，只有数字能区分。
@@ -652,7 +657,7 @@ class SimulationState:
             self.intent_last = action if not detail else f"{action} {detail}"
         else:
             self.intent_rejected += 1
-            self.intent_last = f"{action}: 当前状态拒绝"
+            self.intent_last = f"{action}: {detail or '当前状态拒绝'}"
 
     def move_to(self, x_norm: float, y_norm: float) -> bool:
         """``move_to``：归一化坐标 → 安全区里的一点，然后强制走一段。

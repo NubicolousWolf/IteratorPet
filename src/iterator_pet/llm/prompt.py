@@ -216,7 +216,9 @@ class Situation:
         if self.last_line:
             lines.append(f"你上一次说的是：「{self.last_line}」。")
         if self.filename:
-            # 文件名当**数据**：包在「」里、去掉换行（审计 A11 的同一条口径）
+            # 文件名当**数据**：包在「」里、去掉换行（审计 A11 的同一条口径）。
+            # 后半句"不要假装读到了里面的内容"是**注入护栏**，2026-11-01 我改
+            # to_text 时漏掉过一次（测试当场红了），别删。
             safe = " ".join(str(self.filename).split())[:64]
             lines.append(f"玩家放下的文件名是：「{safe}」（不要假装读到了里面的内容）。")
         return "".join(lines)

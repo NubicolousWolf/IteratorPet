@@ -65,12 +65,17 @@ class Clock:
 
 # ------------------------------------------------------------------ 摘话 --
 def test_clean_line_makes_a_reply_fit_a_bubble():
-    """摘话的三件事：去掉气泡显示不了的、掐断暴走回复、只剩舞台提示就算空。"""
+    """摘话的三件事：去掉气泡显示不了的、掐断暴走回复、只有舞台提示也要留一句。
+
+    最后一条 2026-11-01 改了规格：用户实测"要求闭眼 → 空回复"，一半原因就是
+    ``（她闭上眼睛）`` 被洗成空串。现在整句都是舞台提示时**原样保留**——
+    玩家至少知道她做了什么。
+    """
     assert llm_client.clean_line("**你好**。") == "你好。", "markdown 星号要摘掉"
     assert chr(10) not in llm_client.clean_line("第一行\n第二行"), "换行要抹平（源码是 \n 占位，不是真换行）"
     long = llm_client.clean_line("啊" * 400)
     assert len(long) <= 120, "暴走回复要掐断"
-    assert llm_client.clean_line("（她转过头）") == "", "只有舞台提示 = 没有说话"
+    assert "转过头" in llm_client.clean_line("（她转过头）"), "只有舞台提示也要留一句"
 
 
 def test_parse_completion_knows_both_protocols():
@@ -96,6 +101,25 @@ def test_build_messages_keeps_system_history_then_the_new_line():
 
 
 # --------------------------------------------------- 关掉 = 零请求（A1） --
+def test_a_stage_direction_only_reply_is_still_a_line():
+    """整句都是"（她闭上眼睛。）"时不许洗成空——玩家至少要知道她做了什么。"""
+    from iterator_pet.llm.client import clean_line
+
+    assert clean_line("（她闭上眼睛，什么也没说。）")
+    assert "闭上眼睛" in clean_line("（她闭上眼睛，什么也没说。）")
+
+
+def test_an_empty_reply_says_what_the_model_actually_sent(tmp_path):
+    """"空回复"必须自带原始返回片段——否则玩家和我们都没法判断是谁的锅。"""
+    store = _store(tmp_path)
+    payload = {"choices": [{"message": {"content": ""}}]}
+    client = llm_client.LLMClient(store, transport=FakeTransport(payload))
+
+    result = client.ask([{"role": "user", "content": "闭眼"}], allow_actions=True)
+    assert not result.ok
+    assert "原始返回" in result.reason
+
+
 def test_a_sleep_tool_call_is_not_an_empty_reply(tmp_path):
     """模型直接调 `sleep()`（不套 act）时，这次回复**不许**被判成"空回复"。
 
@@ -191,9 +215,15 @@ def test_every_transport_failure_is_reported_without_raising(tmp_path):
     client = llm_client.LLMClient(store, transport=FakeTransport({"choices": []}))
     assert not client.ask([{"role": "user", "content": "hi"}]).ok, "空 choices 算失败"
 
+    # 2026-11-01 规格变了：只有舞台提示时**不再算失败**，而是当一句台词显示
+    # （用户实测"要求闭眼 → 空回复"）。真正的空是一点文字都没有。
     client = llm_client.LLMClient(store, transport=FakeTransport(_reply("（沉默）")))
     result = client.ask([{"role": "user", "content": "hi"}])
-    assert not result.ok and "空" in result.reason, "只有舞台提示也算空回复"
+    assert result.ok and result.text, "只有舞台提示也要成句"
+
+    client = llm_client.LLMClient(store, transport=FakeTransport(_reply("")))
+    result = client.ask([{"role": "user", "content": "hi"}])
+    assert not result.ok and "原始返回" in result.reason, "真空回复要带上模型原文"
 
 
 # --------------------------------------------------------------- 熔断 --

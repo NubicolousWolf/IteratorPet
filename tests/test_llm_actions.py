@@ -412,6 +412,29 @@ def test_a_tool_named_like_the_action_is_accepted():
     assert reply.action == "move_to" and reply.args == {"x": 0.7, "y": 0.3}
 
 
+def test_an_invented_action_name_is_mapped_to_ours():
+    """「闭眼」被模型叫成 close_eyes / meditate 也得认（2026-11-01 实测）。"""
+    for alias, real in (("close_eyes", "hold"), ("meditate", "hold"),
+                        ("move", "move_to"), ("look", "look_at"),
+                        ("wake_up", "wake"), ("nap", "sleep")):
+        assert llm_actions._clean_action(alias) == real
+
+    reply = llm_actions.parse_json_fallback('{"action":"close_eyes","seconds":9}')
+    assert reply.action == "hold" and reply.args == {"seconds": 9}
+
+
+def test_move_to_without_coordinates_is_refused_not_centred():
+    """模型只给动作不给坐标 → 明确拒绝，别默认走腔室中心。
+
+    旧行为默认 (0.5, 0.5)，人偶恰好在中心附近时看起来就是"进了队列却没动"。
+    """
+    sim = _sim()
+    sim.llm = StubRouter([llm_actions.Intent("move_to", args={})])
+    assert sim._apply_intents() is False
+    assert sim.intent_rejected == 1
+    assert "缺坐标" in sim.intent_last
+
+
 def test_a_fenced_json_reply_is_understood():
     """弱模型会把动作包在 ```json``` 里、前面还先寒暄一句（2026-11-01 实测）。
 
