@@ -946,6 +946,29 @@ def eye_offset(look, perp, axis, index):
              perp[1] * lateral + axis[1] * forward), width)
 
 
+def split_antenna_pods(pods, head, look_dir):
+    """两侧天线 → ``(远侧, 近侧)``；远侧要**先画**（被脑袋挡住）。
+
+    用户在 2026-11-01 报的现象："转头时本该被脑袋遮住的那一侧天线盖在脑袋上"。
+    判据是**世界视线**的 x 分量：pod 相对头心的 ``dx`` 与视线方向相反 → 在远侧。
+    ``|lx| < 0.15``（基本正对/背对镜头）时两侧都算近侧，保持原样全在前——
+    正对时两根天线都在头两侧，谁也不该被整个吞掉。
+    """
+    lx = float(look_dir[0])
+    ly = float(look_dir[1])
+    norm = (lx * lx + ly * ly) ** 0.5
+    lx = lx / norm if norm > 1e-6 else 0.0
+    behind: list = []
+    front: list = []
+    for pod in pods:
+        dx = pod[1] - head[0]
+        if abs(lx) >= 0.15 and dx * lx < 0.0:
+            behind.append(pod)
+        else:
+            front.append(pod)
+    return behind, front
+
+
 def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     """Everything the source positions in OracleGraphics.DrawSprites."""
     axis = C.dir_vec(state.head, state.body0)      # vector6 = DirVec(head, body)
@@ -997,6 +1020,18 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
         painter.drawPixmap(QRectF(-1.5, 0.0, 3.0, 11.2), antenna, QRectF(antenna.rect()))
         painter.restore()
 
+    # 自定义天线的**分层**（2026-11-01 用户报）：两侧不能都画在头之后。
+    # 转头时远侧那根本来就在头的后面，必须**先画**（被头盖住）；近侧仍画在头之后。
+    # 判据用世界视线 x 分量：头两侧的 pod 相对头心的 dx 与视线方向相反 → 远侧。
+    # 视线几乎垂直屏幕（|lx| 小）时两侧都是"侧面"，维持原来的全在前。
+    behind_pods: list[tuple[float, float, float, float]] = []
+    front_pods: list[tuple[float, float, float, float]] = []
+    if custom:
+        behind_pods, front_pods = split_antenna_pods(pods, state.head, state.look_dir)
+        pixmap = _art_pixmap(art, flip_y=True)   # 一张图两侧共用：只拼一次
+        for sign, cx, cy, aim in behind_pods:
+            draw_antenna_art(painter, ap, art, pixmap, sign, cx, cy, aim)
+
     # HeadSprite: Circle20 at (rad/9, rad/11), rotated with the body axis
     head_w = 20.0 * HEAD_RAD / 9.0
     head_h = 20.0 * HEAD_RAD / 11.0
@@ -1019,12 +1054,12 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     # （见 draw_headpiece 的说明）。
     draw_headpiece(painter, state)
 
-    # 玩家画的天线：**在头与下巴之后、眼睛之前**。照源码顺序（头顶部件在头之前）
-    # 画的话，画板 2026-10-31 扩进来的"半个脑袋"区域里画什么都会被头整个盖住 ——
-    # 画板上有、屏幕上没有，是最难解释的一类谎。眼睛仍在后面画，所以她照样盯着你。
+    # 玩家画的天线：**分层**（2026-11-01）。画板 2026-10-31 扩进来的"半个脑袋"
+    # 区域里画什么都会被头整个盖住 —— 画板上有、屏幕上没有，是最难解释的一类谎。
+    # 所以近侧画在头之后；**远侧已经在上面的 `behind_pods` 里先画过了**，
+    # 转头时它被脑袋挡住，正是用户要的效果。眼睛仍在最后画，所以她照样盯着你。
     if custom:
-        pixmap = _art_pixmap(art, flip_y=True)   # 一张图两侧共用：只拼一次
-        for sign, cx, cy, aim in pods:
+        for sign, cx, cy, aim in front_pods:
             draw_antenna_art(painter, ap, art, pixmap, sign, cx, cy, aim)
 
     # EyeSprite: 1x1 `pixel` at head + perp*clamp(look.x*3 + 2.5*sign, -5, 5)

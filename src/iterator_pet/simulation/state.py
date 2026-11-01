@@ -1452,8 +1452,8 @@ class SimulationState:
             parts.append("这台计算机的处理器正被其他重负载占用，"
                          "你已主动调暗光环、关闭电光以收敛自身算力消耗")
         if reactions.reflect_memory and self.world.mem_pct >= 0.8:
-            parts.append(f"计算机内存占用较高（{int(self.world.mem_pct * 100.0)}%），"
-                         "你光环上的记忆位密集浮现")
+            parts.append(f"计算机内存占用较高（{int(self.world.mem_pct * 100.0)}%）。"
+                         )
         battery = self.world.battery_pct
         if (battery is not None and not self.world.on_ac
                 and battery <= C.WORLD_BATTERY_LOW):

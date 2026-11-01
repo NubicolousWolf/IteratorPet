@@ -75,7 +75,7 @@ def _atomic_write(path: Path, payload: dict) -> str:
 
 
 def _backup(path: Path) -> None:
-    """坏文件先留一份 ``.bak``：玩家的手写内容不该因为"我们想保存"就消失。"""
+    """坏文件先留一份 ``.bak``"""
     try:
         if path.is_file():
             shutil.copyfile(path, path.with_suffix(path.suffix + ".bak"))
@@ -84,7 +84,7 @@ def _backup(path: Path) -> None:
 
 
 def write_document(path: Path | str, payload: dict) -> str:
-    """原子写一份 JSON 文档（角色注册表建卡用；和这里其它写入走同一条路）。
+    """原子写一份 JSON 文档。
 
     公开出来是因为**新建角色**属于 ``characters.py`` 的生命周期，而不是
     "保存角色卡"——但两条路必须共用同一个"临时文件 + replace"实现，

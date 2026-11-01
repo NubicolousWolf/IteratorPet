@@ -45,19 +45,18 @@ class Config:
     install: str = ""
     # 电光频率档位：off / eco / computing（开发者菜单里切，见 constants.HALO_SPARK_RATES）
     spark_rate: str = "eco"
-    # 杀鼠标时的光标特效（档 2：换忙光标 0.3 s）。默认开，可用托盘开关 / 环境变量关掉
+    # 杀鼠标时的光标特效。默认开，可用托盘开关 / 环境变量关掉
     cursor_fx: bool = True
     # 对话气泡开关（托盘「对话」）。关掉后不抽池、不绘制。
     dialogue_enabled: bool = True
-    # 人偶编辑器画板的底色（用户 2026-10-31：默认深色会和深色部件糊在一起看不清）。
+    # 人偶编辑器画板的底色
     board_bg: str = "#6b6b70"
     # 当前角色：key 指向 characters/<key>.json 里的一张卡（v0.2.0 起可以是玩家
     # 自己建的角色）。清单与外观解析在 characters.py；托盘/右键菜单切换。
     character: str = "pebbles"
     # A2（2026-11-01 第二组）：内存占用 → 光环上浮现的 MemoryBit 数量。
-    # 用户 2026-10-31："很有意思的设计，但要加个开关" —— 所以**默认关**，
     # 关掉时光环照旧画满 100 位，和以前一模一样。
-    halo_memory_reflect: bool = False
+    halo_memory_reflect: bool = True
 
 
 def legacy_data_dir() -> Path:

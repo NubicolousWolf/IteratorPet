@@ -584,3 +584,89 @@ def test_cord_tail_is_only_leashed_at_eighty_pixels():
     # do is sit glued to the chunk centre the way the old 12 px limit forced.
     assert max(distances) > 40.0, f"tail never left the body (max {max(distances):.1f} px)"
     assert max(distances) < C.CORD_TAIL_LIMIT * 1.3, f"tail ran to {max(distances):.1f} px"
+
+
+def test_the_far_antenna_is_drawn_behind_the_head():
+    """2026-11-01 用户报：转头时本该被脑袋遮住的那一侧天线盖在脑袋上。
+
+    判据是**每侧**各自的远近，不是整张图的前后；正对镜头时两侧都在前面
+    （否则会凭空少一根）。
+    """
+    from iterator_pet.rendering import renderer
+
+    head = (100.0, 100.0)
+    left = (-1.0, 90.0, 100.0, 0.0)
+    right = (1.0, 110.0, 100.0, 0.0)
+
+    behind, front = renderer.split_antenna_pods([left, right], head, (1.0, 0.0))
+    assert [p[0] for p in behind] == [-1.0], "看右边 → 左边那根在头后面"
+    assert [p[0] for p in front] == [1.0]
+
+    behind, front = renderer.split_antenna_pods([left, right], head, (-1.0, 0.0))
+    assert [p[0] for p in behind] == [1.0], "看左边 → 右边那根在头后面"
+
+    behind, front = renderer.split_antenna_pods([left, right], head, (0.0, 1.0))
+    assert behind == [] and len(front) == 2, "正对镜头时不吞任何一根"
+
+
+def test_the_far_antenna_is_really_covered_by_the_head():
+    """像素级复核：转头那侧的红色块要被真的画在头**下面**。
+
+    画一块压在脑袋内侧的实心红块，然后比较左右半边的红色像素数：
+    看右边 → 左边（远侧）的红必须明显少于右边（近侧）；看左边反之。
+    """
+    import dataclasses
+
+    from PySide6.QtGui import QColor, QImage, QPainter
+
+    from iterator_pet.platform.puppet_tab import BOARD_ANCHORS, BOARD_SIZES
+    from iterator_pet.rendering import renderer
+    from iterator_pet.rendering.pixel_art import PixelArt
+    from iterator_pet.simulation import appearance as ap
+
+    col, row = BOARD_ANCHORS["antenna"]
+    art = PixelArt.blank(*BOARD_SIZES["antenna"])
+    for y in range(int(row) - 4, int(row) + 10):
+        for x in range(int(col) - 2, int(col) + 6):
+            # 纯红：皮肤是 #ff66cb（绿 102/蓝 203），用"绿<40 且蓝<40"才分得开。
+            # 之前用 #ff2d55（蓝 85）时皮肤也被算进红色像素，单跑能过、整组跑就飘。
+            art.set(x, y, "#ff0000")
+    sim = SimulationState((0.0, 0.0, 260.0, 300.0), warmup=0, character="pebbles")
+    for _ in range(140):
+        sim.step(1.0 / C.GAME_HZ)
+    appearance = ap.build_appearance("probe", "pebbles", {
+        "antenna_pixels": art.to_dict(),
+        "antenna_anchor": list(BOARD_ANCHORS["antenna"]),
+        "antenna_scale": 0.5,
+        "headpiece_mode": "none",
+    })
+
+    def halves(look) -> tuple[int, int]:
+        state = dataclasses.replace(sim.interpolate(1.0), look_dir=look,
+                                    appearance=appearance)
+        size, zoom = 240, 6.0
+        image = QImage(size, size, QImage.Format.Format_ARGB32)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.translate(size * 0.5 - state.head[0] * zoom,
+                          size * 0.5 - state.head[1] * zoom)
+        painter.scale(zoom, zoom)
+        renderer.draw_puppet_head(painter, state)
+        painter.end()
+        left = right = 0
+        for y in range(size):
+            for x in range(size):
+                colour = image.pixelColor(x, y)
+                if (colour.red() > 200 and colour.green() < 40
+                        and colour.blue() < 40):
+                    if x < size // 2:
+                        left += 1
+                    else:
+                        right += 1
+        return left, right
+
+    left, right = halves((1.0, 0.0))       # 看右边：左侧是远侧
+    assert left < right * 0.7, f"看右时左侧天线没有被头挡住（左 {left} / 右 {right}）"
+    left, right = halves((-1.0, 0.0))      # 看左边：右侧是远侧
+    assert right < left * 0.7, f"看左时右侧天线没有被头挡住（左 {left} / 右 {right}）"

@@ -115,11 +115,11 @@ class WorldbookTab(QWidget):
         self.token_budget = QSpinBox()
         self.token_budget.setRange(0, wb.BUDGET_LIMIT)
         self.token_budget.setSuffix(" token")
-        self.token_budget.setToolTip("世界书正文最多占多少预算；超了就按 order 从小到大丢")
+        self.token_budget.setToolTip("世界书正文最多占多少预算；超过预算则按 order 从小到大丢弃")
         self.recursive = QCheckBox("允许 1 层递归")
-        self.recursive.setToolTip("命中条目的正文里再出现别的关键词时，再扫一层（源码硬限 1 层）")
+        self.recursive.setToolTip("命中条目的正文里再出现别的关键词时，扫描一层")
         self.whole_words = QCheckBox("整词匹配")
-        self.whole_words.setToolTip("中文请保持关闭：开着它「卵石」匹配不上「五块卵石」")
+        self.whole_words.setToolTip("中文请保持关闭")
         for widget in (QLabel("扫描深度"), self.scan_depth,
                        QLabel("预算"), self.token_budget,
                        self.recursive, self.whole_words):
@@ -164,8 +164,8 @@ class WorldbookTab(QWidget):
 
         self.comment = QLineEdit()
         self.entry_id = QLineEdit()
-        self.entry_id.setPlaceholderText("留空也行（保存时按顺序对齐）")
-        self.constant = QCheckBox("常驻（不看关键词，永远带上）")
+        self.entry_id.setPlaceholderText("留空时按顺序对齐")
+        self.constant = QCheckBox("常驻")
         head = QHBoxLayout()
         head.addWidget(self.comment, 3)
         head.addWidget(QLabel("id"))
@@ -200,7 +200,7 @@ class WorldbookTab(QWidget):
         self.depth.setRange(0, wb.DEPTH_LIMIT)
         self.order = QSpinBox()
         self.order.setRange(-wb.ORDER_LIMIT, wb.ORDER_LIMIT)
-        self.order.setToolTip("越小越靠前；预算不够时从 order 最小（最靠前）的开始丢")
+        self.order.setToolTip("越小越靠前；预算不够时从 order 最小的开始丢弃")
         self.probability = QSpinBox()
         self.probability.setRange(0, 100)
         self.probability.setSuffix(" %")
@@ -290,7 +290,7 @@ class WorldbookTab(QWidget):
             answer = QMessageBox.question(
                 self, "还没有独立世界书",
                 f"「{self.character}」还没有自己的世界书。\n"
-                "要不要把现在的全局世界书复制一份作为起点？（推荐；之后她与别的角色互不影响）",
+                "要不要把现在的全局世界书复制一份作为起点？",
             )
             if answer == QMessageBox.StandardButton.Yes:
                 self.fork_from_global()

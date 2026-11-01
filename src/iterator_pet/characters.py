@@ -300,7 +300,7 @@ def duplicate(
     origin = card_path(source, root)
     body = _read_document(origin)
     if body is None:
-        return None, f"「{source}」那张卡不是合法 JSON，先修好再复制（不然复制出来也是坏的）。"
+        return None, f"「{source}」那张卡不是合法 JSON，先修好再复制。"
     name = str(new_name or "").strip() or f"{_name_of(body, source)}（副本）"
     error = _write_new_card(new_key, name, base_of(source, root), root, body=body)
     if error:
@@ -321,7 +321,7 @@ def delete(
     """
     root = folder_of(folder)
     if key in BUILTIN_KEYS:
-        return "内置角色不能删除（五块卵石与仰望皓月的默认外观写在源码里）。"
+        return "内置角色不能删除。"
     if not exists(key, root):
         return f"「{key}」不存在。"
     path = card_path(key, root)

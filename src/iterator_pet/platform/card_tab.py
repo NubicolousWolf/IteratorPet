@@ -4,7 +4,7 @@
 一律原样保留 —— 否则玩家在人偶页捏好的配色会被"保存角色卡"顺手抹掉。
 这条由 `llm/cards.py::save_card` 保证，本页只负责收集文本。
 
-`system_prompt` 留空时右侧会有黄字提示：空着会用内置兜底人设（`prompt.FALLBACK_CARDS`），
+`system_prompt` 留空时右侧会有黄字提示：空着会用默认示例人设（`prompt.FALLBACK_CARDS`），
 对自定义角色来说那就是"串台成五块卵石"，必须让玩家看见。
 """
 
@@ -31,7 +31,7 @@ TEXT_FIELDS = (
     ("description", "描述", "世界观与身份；和下面两项一起拼成角色定义"),
     ("personality", "性格", ""),
     ("scenario", "场景", ""),
-    ("system_prompt", "系统提示词", "空着会用内置兜底（自定义角色会串台成五块卵石）"),
+    ("system_prompt", "系统提示词", "空着会用默认示例（自定义角色会串台成五块卵石）"),
     ("post_history_instructions", "回复约束", "句式/字数要求，放在对话历史之后"),
     ("first_mes", "开场白", "目前不自动播放，留给玩家参考"),
     ("mes_example", "对话示例", "带 <START> 的示例片段"),
@@ -62,8 +62,8 @@ class CardTab(QWidget):
         self.path_label = QLabel("")
         self.path_label.setStyleSheet("color:#777; font-size:11px;")
         header.addWidget(self.path_label, 1)
-        self.fallback_button = QPushButton("用内置兜底填满")
-        self.fallback_button.setToolTip("把当前系统提示词/性格/场景换成内置兜底（自定义角色会变成五块卵石）")
+        self.fallback_button = QPushButton("用默认示例填满")
+        self.fallback_button.setToolTip("把当前系统提示词/性格/场景换成默认示例")
         header.addWidget(self.fallback_button)
         outer.addLayout(header)
 
@@ -173,16 +173,16 @@ class CardTab(QWidget):
         tokens = llm_prompt.estimate_tokens(card.definition_text())
         note = f"角色定义约 {tokens} token"
         if not card.system_prompt:
-            note += "　·　系统提示词为空 → 会用内置兜底"
+            note += "　·　系统提示词为空 → 会用默认示例"
         self.estimate.setText(note)
 
     def fill_fallback(self) -> None:
-        """把内置兜底人设填进空着的字段（不覆盖玩家已经写过的内容）。"""
+        """把默认示例人设填进空着的字段（不覆盖玩家已经写过的内容）。"""
         source = llm_prompt.FALLBACK_CARDS.get(self.key)
         if source is None:
             source = llm_prompt.Card(
                 name=self._editors["name"].text() or self.key,
-                system_prompt="你扮演《雨世界》里的一个迭代器。冷淡、理性、说话简短。",
+                system_prompt="你扮演《雨世界》里的一个迭代器。你冷淡、理性、说话简短。",
                 post_history_instructions="用一句中文回答，不超过 40 字。不用括号描写动作，不自称 AI。",
             )
         pairs = (("system_prompt", source.system_prompt),

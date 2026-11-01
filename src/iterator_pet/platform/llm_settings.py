@@ -48,7 +48,7 @@ from ..llm import config as llm_config
 from ..llm import models as llm_models
 
 OPEN: list["LLMSettingsDialog"] = []
-KEY_HINT = "明文存在 llm.json（本机可见）；也可以用环境变量 ITERATORPET_LLM_KEY，优先级更高。"
+KEY_HINT = "明文存在 llm.json；也可以用环境变量 ITERATORPET_LLM_KEY，优先级更高。"
 
 
 def format_context(tokens: int) -> str:
@@ -173,7 +173,7 @@ class LLMSettingsDialog(QDialog):
             box.setDecimals(0)
             box.setSingleStep(5.0)
             box.setSuffix(" s")
-            box.setToolTip("冷却只影响\"多久能再说一句\"；0 = 不限")
+            box.setToolTip("冷却只影响\"两次对话的触发间隔\"；0 = 不限")
         for caption, box in (("拖拽后", self.cooldown_drag),
                              ("搭话后", self.cooldown_talk),
                              ("发怒后", self.cooldown_ritual)):
@@ -184,7 +184,7 @@ class LLMSettingsDialog(QDialog):
         outer.addLayout(self._row("冷却", cooldowns))
 
         self.allow_actions = QCheckBox("允许控制行动")
-        self.file_drop = QCheckBox("允许阅读文件(txt/md/docx/csv/xlsx文件会读内容)")
+        self.file_drop = QCheckBox("允许阅读文件")
         toggles = QVBoxLayout()
         toggles.setContentsMargins(0, 0, 0, 0)
         toggles.setSpacing(4)
@@ -271,7 +271,7 @@ class LLMSettingsDialog(QDialog):
         if not llm_config.has_key(cfg):
             hints.append("还没有 API Key。")
         if not cfg.model:
-            hints.append("还没选模型：先「拉取模型」再选一个。")
+            hints.append("还没选模型。先「拉取模型」再选一个。")
         if self.store.last_error and cfg.model:
             hints.append(self.store.last_error)
         self._set_status("；".join(hints) or "操作步骤：填好 key → 拉取模型 → 选择模型 → 测试链接 → 保存。")

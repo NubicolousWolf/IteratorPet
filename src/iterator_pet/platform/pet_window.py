@@ -76,15 +76,12 @@ class PetWindow(PetCanvas):
         # LLM 的连接与开关在独立的 llm.json（见 llm/config.py）；这里只持有读写器，
         # P1 阶段还没有任何 tick 级调用 —— 关掉时对仿真完全无影响（审计 A1 的前提）。
         self.llm = llm_config.LLMStore()
-        # 审计 A8：玩家要"自己改 JSON"，那就得第一次启动就能看见这些文件
         llm_templates.ensure_template_files()
         self.llm.install_default_file()   # 先补模板再读，state() 的 exists 才不会骗人
         self.llm.load()
         self.llm.upgrade()                # 老文件缺的新字段补上（只加不改）
         self.dialogue_enabled = bool(getattr(config, 'dialogue_enabled', True))
         # 角色：先过一遍注册表（``config.character`` 可能指向一个已经被玩家删掉的 key），
-        # 再让她决定外观。v0.1.9 及以前这里只有 ``CHARACTERS`` 两个常量，卡里的
-        # 外观草稿根本没人读——那就是"工坊里改了、桌面上没变"的根因。
         self._character = characters.resolve_key(getattr(config, "character", "pebbles"))
         config.character = self._character
         self.simulation.appearance = characters.appearance_of(self._character)
@@ -619,7 +616,7 @@ class PetWindow(PetCanvas):
         if router.busy:
             QMessageBox.information(self, "给 LLM 发消息", "正在等上一条回复，稍后再试。")
             return
-        text, ok = QInputDialog.getText(self, "给 LLM 发消息", "你想对她说：")
+        text, ok = QInputDialog.getText(self, "给 LLM 发消息", "你想说：")
         if not ok or not text.strip():
             return
         if not router.ask_text(text.strip()):
@@ -682,12 +679,12 @@ class PetWindow(PetCanvas):
             return
         self._stop_debug_watch()
         reply = router.last_reply
-        lines = [reply.text or "（她没有说话）"]
+        lines = [reply.text or "（没有说话）"]
         if reply.action:
             detail = " ".join(f"{k}={v}" for k, v in
                               (getattr(reply, "action_args", {}) or {}).items())
             lines.append(f"动作：{reply.action}{(' ' + detail) if detail else ''}")
-            lines.append("（已进意图队列，10 秒内有效。若她没动，看「开发者面板」的 "
+            lines.append("（已进意图队列，10 秒内有效。若没动，看「开发者面板」的 "
                          "intents 行：accepted / rejected 和最后一条原因写在那里；"
                          "正在说话/拖拽/仪式中也会被记成 rejected。）")
         if reply.reason:
@@ -785,7 +782,7 @@ class PetWindow(PetCanvas):
         menu.addAction(action_click)
 
         menu.addSeparator()
-        action_cursor = QAction("光标特效（杀鼠标时）", menu)
+        action_cursor = QAction("光标特效", menu)
         action_cursor.setCheckable(True)
         action_cursor.setChecked(bool(getattr(self.config, "cursor_fx", True)))
 
@@ -822,7 +819,7 @@ class PetWindow(PetCanvas):
             spark_menu.addAction(action_rate)
 
         # A2（2026-11-01 第二组）：用户 2026-10-31 要的"开关"。默认关。
-        action_memory = QAction("光环记忆位随内存", menu)
+        action_memory = QAction("光环MemoryBits数目随CPU内存情况改变", menu)
         action_memory.setCheckable(True)
         action_memory.setChecked(bool(getattr(self.config, "halo_memory_reflect", False)))
         action_memory.triggered.connect(self.toggle_memory_bits)

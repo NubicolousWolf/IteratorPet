@@ -79,7 +79,7 @@ class _CharacterDialog(QDialog):
             hint = QLabel(f"会把「{copying}」的整张卡（含外观与未知字段）原样复制一份。")
         else:
             hint = QLabel(
-                "骨骼基底决定眼睛高度、躯干高度与仪式行为（杀鼠标 / 只挣脱）；颜色稍后在人偶外观页调。"
+                "骨骼基底决定眼睛高度、躯干高度与生气了会不会用神秘小技能（这个是早期架构遗留物，也许有一天会解绑）；颜色稍后在人偶外观页调。"
             )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#777; font-size:11px;")
@@ -104,7 +104,7 @@ class _CharacterDialog(QDialog):
         key = self.key_edit.text().strip()
         error = characters.validate_key(key)
         if error:
-            self.error.setText(error)      # 就地报错，不关窗——省得玩家重打一遍
+            self.error.setText(error)      # 就地报错，不关窗
             return
         self.accept()
 
@@ -161,9 +161,9 @@ class Workshop(QDialog):
         self.character_box.currentIndexChanged.connect(self._on_character)
         top.addWidget(self.character_box, 1)
         self.new_button = QPushButton("新建…")
-        self.new_button.setToolTip("从空卡开始建一个自己的迭代器")
+        self.new_button.setToolTip("从空卡开始")
         self.copy_button = QPushButton("复制…")
-        self.copy_button.setToolTip("以当前角色为底复制一份（外观、卡、未知字段全带走）")
+        self.copy_button.setToolTip("以当前角色为底复制一份")
         self.delete_button = QPushButton("删除")
         self.delete_button.setToolTip("只删卡文件；聊天记录与本地台词默认保留")
         self.activate_button = QPushButton("设为当前角色")

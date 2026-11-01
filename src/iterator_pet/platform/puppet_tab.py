@@ -62,7 +62,7 @@ COLOUR_FIELDS = (
 #: 三个侧边/袍子配色（原来的写死值现在可改）
 ANTENNA_FIELDS = (
     ("pod_colour", "耳麦", "头两侧的两个圆（PhoneSprite）"),
-    ("pod_rim_colour", "内圈", "叠在外圈上的那个小圆"),
+    ("pod_rim_colour", "内圈", "叠在外圈上的小圆"),
     ("antenna_colour", "触角", "从耳麦朝外的一根（LizardScaleA1）"),
 )
 
@@ -318,7 +318,7 @@ class PixelCanvas(QWidget):
     def _palette_of_board(self) -> tuple[QColor, QColor, QColor]:
         """底色 → (棋盘深格, 棋盘浅格, 线条色)。
 
-        底色可改（用户 2026-10-31：默认深色会和深色部件糊在一起）：
+        底色可改：
         棋盘格用同色系 ±12%，线条按亮度自动切黑/白，保证在任何底色上都看得见。
         """
         base = QColor(self.bg)
@@ -561,7 +561,7 @@ class PuppetTab(QWidget):
         self.base_box = QComboBox()
         for name, label in ap.BASE_TEMPLATES.items():
             self.base_box.addItem(label, name)
-        self.base_box.setToolTip("骨骼/仪式差异来自基底：眼高、躯干高度、是否杀鼠标")
+        self.base_box.setToolTip("骨骼影响眼高、躯干高度、是否杀鼠标")
         left.addWidget(QLabel("骨骼基底"))
         left.addWidget(self.base_box)
 
@@ -683,9 +683,9 @@ class PuppetTab(QWidget):
             for _k, title, width, height, _c, _r in BOARDS
         )
         self.hint = QLabel(
-            f"画板：{sizes}（每格像素固定，窗口再小也只会出滚动条，不会裁掉）。"
-            "天线画板已扩到半个脑袋：右边到脑袋中线、下边到下巴，脑袋/下巴/眼睛都是参考线。"
-            "左键画、右键擦、Alt 取色；辅助线只出现在空白的格子上。"
+            f"画板：{sizes}。"
+            "右边到脑袋中线、下边到下巴，脑袋/下巴/眼睛是参考线。"
+            "左键画、右键擦、Alt 取色。"
         )
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color:#888; font-size:11px;")
@@ -849,11 +849,11 @@ class PuppetTab(QWidget):
             try:
                 draft[field] = art.to_dict()
             except ValueError:
-                pass                      # 颜色太多：save() 里会明确报错，不静默丢
+                pass                      # 颜色太多：save() 里会明确报错
             if scale is not None:
                 draft["headpiece_scale" if key == "headpiece" else "antenna_scale"] = scale
             if key == "antenna":
-                # 锚点跟着图一起存：画板是偏心的，"圆心在画布中心"这条老约定已经不成立。
+                # 锚点跟着图一起存：画板是偏心的。
                 draft["antenna_anchor"] = list(self._antenna_anchor)
         return draft
 

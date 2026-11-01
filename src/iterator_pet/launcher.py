@@ -62,7 +62,7 @@ def _pick_install_folder() -> Path | None:
 def _resolve_install(config: Config, *, force_setup: bool = False) -> tuple[Path | None, bool]:
     """返回 ``(游戏目录, 是否无游戏继续)``；必要时写回配置。
 
-    **启动路径上绝不弹窗**（用户明确要求）：自动探测失败就记日志、用内置图元继续。
+    **启动路径上绝不弹窗**：自动探测失败就记日志、用内置图元继续。
     想手动指定，用 ``启动.exe --setup`` 或环境变量 ``RAINWORLD_DIR``。
     """
     if not force_setup and looks_like_install(config.install):
@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 重复启动 = 重开一只：杀掉旧进程、自己上（不提示、不弹窗）。
     if not acquire_or_replace():
-        _say("[setup] 旧实例杀不掉（可能是源码运行的 python 实例），本次照常启动")
+        _say("[setup] 旧实例清除失败，本次照常启动")
 
     if __import__("os").environ.get("ITERATORPET_DEBUG"):
         _debug_dump()

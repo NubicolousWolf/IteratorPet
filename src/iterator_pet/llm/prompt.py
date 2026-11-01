@@ -33,7 +33,7 @@ from . import worldbook as wb
 # 输出契约：和角色卡里的 post_history_instructions 互补——那条是"作者口味"，
 # 这条是我们程序**必须**拿到的东西（单行、够短、不要旁白），不能交给玩家改坏。
 OUTPUT_CONTRACT = (
-    "【输出要求】只输出她此刻说的那一句话本身：中文，最多 40 字；"
+    "【输出要求】只输出此刻说的那一句话本身：中文，最多 40 字；"
     "不加引号，不写旁白，不用括号描写动作，不自称 AI，不解释自己是谁。"
 )
 # 预算里给"当前情境 + 作者注记"留的余量，免得它们把历史挤光
@@ -105,7 +105,7 @@ FALLBACK_CARDS = {
     "pebbles": Card(
         name="五块卵石",
         personality="冷淡、理性、嫌麻烦。话少，常用短句。",
-        scenario="她把自己关在满是机械臂的房间里，算不完的事缠着她。",
+        scenario="他把自己关在满是机械臂的房间里，算不完的事缠着他。",
         system_prompt="你扮演《雨世界》里的迭代器「五块卵石」：一座巨大的机械生命，冷淡、理性、说话简短。",
         post_history_instructions="用一句中文回答，不超过 40 字。不用括号描写动作，不自称 AI。",
     ),
@@ -220,7 +220,7 @@ class Situation:
             # 后半句"不要假装读到了里面的内容"是**注入护栏**，2026-11-01 我改
             # to_text 时漏掉过一次（测试当场红了），别删。
             safe = " ".join(str(self.filename).split())[:64]
-            lines.append(f"玩家放下的文件名是：「{safe}」（不要假装读到了里面的内容）。")
+            lines.append(f"玩家放下的文件名是：「{safe}」。")
         return "".join(lines)
 
 
@@ -307,7 +307,7 @@ def assemble(
     # -- 组装（顺序见模块 docstring）
     system_text = _system_text(card, kept)
     if cfg.allow_actions:
-        # 动作的含义必须写清楚（§3.3）：不然模型会以为 talk 是"说话"，
+        # 动作的含义必须写清楚（§3.3）"，
         # 于是每一句台词都挂一个动作。
         system_text = (system_text + "\n\n" + llm_actions.TOOL_GUIDE).strip()
     at_depth = [e for e in kept if e.position == "at_depth"]
