@@ -34,8 +34,17 @@ from .. import characters
 from ..simulation import constants as C
 from ..simulation.lines import Lines
 
-#: 三个事件；``ritual`` 是仪式（杀鼠标成功 / 挣脱完成）那一 tick 说的话。
-EVENTS = (("drag", "拖拽"), ("talk", "长时间静止"), ("ritual", "仪式"))
+#: 六个事件；``ritual`` 是仪式（杀鼠标成功 / 挣脱完成）那一 tick 说的话。
+#: 2026-11-01 第一组加了三个"外部要求说一句"的：启动 / 戳一下 / 空闲自语
+#: （详见 ``simulation/events.py`` 的 ``PENDING_EVENTS``）。
+EVENTS = (
+    ("drag", "拖拽"),
+    ("talk", "长时间静止"),
+    ("ritual", "仪式"),
+    ("startup", "启动时"),
+    ("poke", "戳一下"),
+    ("idle_talk", "空闲自语"),
+)
 SILENT = C.DIALOGUE_SILENT_ENTRY
 
 

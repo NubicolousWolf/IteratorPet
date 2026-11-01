@@ -71,6 +71,10 @@ class RenderState:
     behaviour: str
     time: float
     ticks: int
+    # 打坐闭眼（2026-11-01）：源码 ``EyesClosed => movementBehavior == Meditate``
+    # （ss.cs:3153），渲染层据此把眼睛画成 1 px 细线（og.cs:1869 的 eyesOpen=0）。
+    # 不插值：睁/闭是二值，跨帧混出一个 1.5 px 的"半睁"只会像糊了。
+    eyes_closed: bool = False
     # 腔室矩形（仿真像素）。渲染层拿它把活塞截到腔室里（游戏里墙紧贴轨道，活塞压在
     # 墙前看不出问题；桌面上屏幕外什么都没有，被窗口裁掉就是硬切口）。肘点**不**夹：
     # 2026-10-27 的翻肘护栏会让肘点单 tick 跳 ~196 px，已整个拆掉。
@@ -136,6 +140,7 @@ class RenderState:
             ],
             cursor=other.cursor,
             behaviour=other.behaviour,
+            eyes_closed=other.eyes_closed,
             time=other.time,
             ticks=other.ticks,
             bounds=other.bounds,
@@ -226,6 +231,14 @@ class SimulationState:
         self.investigate_speed = C.INVESTIGATE_ANGLE_SPEED_MIN
         self._talk_point: tuple[float, float] | None = None
         self._talk_anchor: tuple[float, float] | None = None
+        # 打坐（2026-11-01 第一组）：`posture` 是**姿态叠加层**，不进三态抽签。
+        # 进抽签会改动 BEHAVIOUR_BASE 拟合出来的"roaming 75 %"（AGENTS §6.2），
+        # 而用户要的只是"她偶尔会停下来闭眼"。
+        self.posture = ""
+        self.meditate_left = 0
+        self._meditate_age = 0
+        self._meditate_anchor: tuple[float, float] | None = None
+        self._idle_ticks = 0          # 连续无互动的 tick 数（空闲自语）
         self.cursor: tuple[float, float] | None = None
         self.time = 0.0
         self.ticks = 0
@@ -346,6 +359,7 @@ class SimulationState:
         # 不能复用 drag_cooldown —— 那条被 tests/test_drag.py 钉死在 13 tick 后必须能再抓。
         if self.kill.blocked:
             return False
+        self.wake_up()          # 被拎起来就别再打坐了（2026-11-01 打坐姿态层）
         self.drag_mode = mode
         self.drag_point = point
         if point is not None:
@@ -585,6 +599,153 @@ class SimulationState:
         self.intent_last = action
         return False
 
+    def _behaviour_targets(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """本 tick 的 ``(get_to, look_point)``：三态姿态（源码形状）。
+
+        The selector is OUR addition (see constants.py); the three poses are
+        the source's. ``get_to`` and the gaze are then re-derived per state.
+        """
+        cursor_speed = self.selector.observe_cursor(self.cursor)
+        self.cursor_speed = cursor_speed
+        self.behaviour = self.selector.choose(
+            self.creature.chunk0, self.cursor, cursor_speed)
+        if self.behaviour == "investigate" and self.cursor is not None:
+            # ss.cs:4185-4188  angle inside +-70 deg, swept 0.4-0.8 deg/tick;
+            # nextPos = player + DegToVec(angle) * 150.
+            self.investigate_angle += self.investigate_speed
+            if abs(self.investigate_angle) > C.INVESTIGATE_ANGLE_LIMIT:
+                self.investigate_speed = -self.investigate_speed
+                self.investigate_angle = max(-C.INVESTIGATE_ANGLE_LIMIT,
+                                             min(C.INVESTIGATE_ANGLE_LIMIT,
+                                                 self.investigate_angle))
+            angle = radians(self.investigate_angle)
+            offset = (sin(angle) * C.INVESTIGATE_RADIUS,
+                      -cos(angle) * C.INVESTIGATE_RADIUS)
+            get_to = (self.cursor[0] + offset[0], self.cursor[1] + offset[1])
+        elif self.behaviour == "talk" and self.cursor is not None:
+            # ss.cs:4278-4285  CommunicatePosScore parks the iterator at a fixed
+            # distance from the player. Commit to a POINT (re-picked only if the
+            # cursor wanders off) so the body can arrive and rest instead of
+            # chasing a goal that slides every tick. The distance is the constant
+            # ``C.TALK_DISTANCE`` = 76 sim px (three gown widths), NOT a fraction
+            # of the chamber -- a standoff that grows with the monitor is how the
+            # pet ended up talking from 236 px away.
+            if (self._talk_point is None or self._talk_anchor is None
+                    or C.dist(self.cursor, self._talk_anchor) > C.TALK_REPICK):
+                direction = C.dir_vec(self.cursor, self.creature.chunk0)
+                if direction == (0.0, 0.0):
+                    direction = (0.0, 1.0)
+                self._talk_point = (self.cursor[0] + direction[0] * C.TALK_DISTANCE,
+                                    self.cursor[1] + direction[1] * C.TALK_DISTANCE)
+                self._talk_anchor = self.cursor
+            get_to = self._talk_point
+        else:
+            self._talk_point = None
+            self._talk_anchor = None
+            get_to = self.wander.get_to()
+
+        look_point = (self.cursor if self.behaviour != "roaming" and self.cursor is not None
+                      else self.wander.look_point)
+        return get_to, look_point
+
+    # -- 打坐 / 戳一下 / 空闲自语（2026-11-01 第一组）-------------------------
+    def enter_meditate(self, ticks: int | None = None) -> bool:
+        """坐下打坐（原地、闭眼、抬头 40 px）。返回是否真的坐下了。
+
+        源码 ``Meditate`` 会先走到 ``MiddleOfTile(24,17)``；用户 2026-10-31 明确
+        否掉了这一步（"去掉移动到中心，就待在原地"），所以目标点就是身体当前位置。
+        """
+        if self.posture == "meditate":
+            return False
+        self.posture = "meditate"
+        self._meditate_age = 0
+        self._meditate_anchor = self.creature.chunk0
+        ceiling = C.MEDITATE_MAX_TICKS if ticks is None else max(1, int(ticks))
+        self.meditate_left = min(int(C.MEDITATE_MAX_TICKS), ceiling)
+        self._talk_point = None
+        self._talk_anchor = None
+        return True
+
+    def wake_up(self) -> bool:
+        """从打坐里起来。返回是否真的醒着（本来就醒着 → False）。"""
+        if self.posture != "meditate":
+            return False
+        self.posture = ""
+        self.meditate_left = 0
+        self._meditate_age = 0
+        self._meditate_anchor = None
+        return True
+
+    @property
+    def meditating(self) -> bool:
+        return self.posture == "meditate"
+
+    def _step_meditate(self) -> None:
+        """每 tick：该不该坐下 / 该不该起来。
+
+        进入条件（全是我们自己定的）：正在漫游、光标停满 20 s、身体已站住，
+        再乘一个 1/300 的骰子。退出条件：拖拽、到点、或源码那个 0.001/tick
+        （ss.cs:4147）——最短坐 5 s，免得一坐下就被骰子赶起来。
+        """
+        if self.dragging:
+            self.wake_up()
+            return
+        if self.posture == "meditate":
+            self._meditate_age += 1
+            if self.meditate_left > 0:
+                self.meditate_left -= 1
+            if self._meditate_age < C.MEDITATE_MIN_TICKS:
+                return
+            if (self.meditate_left <= 0
+                    or self.rng.random() < C.MEDITATE_EXIT_CHANCE):
+                self.wake_up()
+            return
+        # 光标一动就重新计时；抽签的门槛由选择器自己的 still_ticks 提供。
+        if self.cursor_speed > C.SCORE_MOTION_MIN:
+            return
+        if (self.behaviour == "roaming"
+                and self.selector.still_ticks >= C.MEDITATE_STILL_TICKS
+                and self.last_body_speed < C.WANDER_SETTLED_SPEED
+                and self.rng.random() < C.MEDITATE_ENTER_CHANCE):
+            self.enter_meditate()
+
+    def _reset_idle(self) -> None:
+        self._idle_ticks = 0
+
+    def poke(self) -> bool:
+        """戳一下人偶（鼠标点击，不是拖拽）。返回是否排进了一句台词。
+
+        用户 2026-10-31："不做单独点击动作，只做区分点击和拖拽。点击被视作是
+        戳了一下人偶" —— 所以这里不改姿态、不加动画，只唤醒 + 排队一句台词。
+        """
+        woke = self.wake_up()
+        self._reset_idle()
+        queued = self.events.push("poke")
+        return queued or woke
+
+    def announce_startup(self) -> bool:
+        """启动问候（窗口层构造完之后调一次，**不**放进 ``__init__``）。
+
+        放进构造器的话，测试里上百次 ``SimulationState(...)`` 都会排一句台词，
+        现有断言会被一句随机台词打乱；生产路径只有 ``PetWindow`` 走这一条。
+        """
+        self._reset_idle()
+        return self.events.push("startup")
+
+    def tray_status(self) -> str:
+        """托盘菜单/提示用的一行状态（E2）。只读，不改仿真。"""
+        if self.kill.active:
+            return "仪式中"
+        if self.dragging:
+            return "被你拎着"
+        if self.posture == "meditate":
+            return "打坐中"
+        if self.behaviour == "talk":
+            return "看着你"
+        if self.behaviour == "investigate":
+            return "凑近光标"
+        return "漫游中"
+
     def _apply_control_noop(self) -> None:
         """占位：保留调用点（旧 ``_apply_control`` 已经是空实现）。"""
         return
@@ -738,49 +899,22 @@ class SimulationState:
             self._cur = self._compose()
             return
 
-        # ---- behaviour: roaming / investigate / talk ---------------------
-        # The selector is OUR addition (see constants.py); the three poses are
-        # the source's. ``get_to`` and the gaze are then re-derived per state.
-        cursor_speed = self.selector.observe_cursor(self.cursor)
-        self.cursor_speed = cursor_speed
-        self.behaviour = self.selector.choose(
-            self.creature.chunk0, self.cursor, cursor_speed)
-        if self.behaviour == "investigate" and self.cursor is not None:
-            # ss.cs:4185-4188  angle inside +-70 deg, swept 0.4-0.8 deg/tick;
-            # nextPos = player + DegToVec(angle) * 150.
-            self.investigate_angle += self.investigate_speed
-            if abs(self.investigate_angle) > C.INVESTIGATE_ANGLE_LIMIT:
-                self.investigate_speed = -self.investigate_speed
-                self.investigate_angle = max(-C.INVESTIGATE_ANGLE_LIMIT,
-                                             min(C.INVESTIGATE_ANGLE_LIMIT,
-                                                 self.investigate_angle))
-            angle = radians(self.investigate_angle)
-            offset = (sin(angle) * C.INVESTIGATE_RADIUS,
-                      -cos(angle) * C.INVESTIGATE_RADIUS)
-            get_to = (self.cursor[0] + offset[0], self.cursor[1] + offset[1])
-        elif self.behaviour == "talk" and self.cursor is not None:
-            # ss.cs:4278-4285  CommunicatePosScore parks the iterator at a fixed
-            # distance from the player. Commit to a POINT (re-picked only if the
-            # cursor wanders off) so the body can arrive and rest instead of
-            # chasing a goal that slides every tick. The distance is the constant
-            # ``C.TALK_DISTANCE`` = 76 sim px (three gown widths), NOT a fraction
-            # of the chamber -- a standoff that grows with the monitor is how the
-            # pet ended up talking from 236 px away.
-            if (self._talk_point is None or self._talk_anchor is None
-                    or C.dist(self.cursor, self._talk_anchor) > C.TALK_REPICK):
-                direction = C.dir_vec(self.cursor, self.creature.chunk0)
-                if direction == (0.0, 0.0):
-                    direction = (0.0, 1.0)
-                self._talk_point = (self.cursor[0] + direction[0] * C.TALK_DISTANCE,
-                                    self.cursor[1] + direction[1] * C.TALK_DISTANCE)
-                self._talk_anchor = self.cursor
-            get_to = self._talk_point
+        # ---- 打坐（2026-11-01 第一组）：姿态层压住行为层 --------------------
+        # 源码里 Meditate 是 movementBehavior 的一个取值（ss.cs:4145），进了这个
+        # 状态就不再看玩家、只朝自己头顶看；我们的三态抽签是设计增补，所以
+        # **打坐期间不抽签**，起来后照常从段末抽。
+        self._step_meditate()
+        if self.posture == "meditate":
+            # 目标点是**坐下那一刻**的位置，不是每 tick 现读 chunk0：现读等于
+            # "目标永远贴着自己"，而 creature.step 的 chunk1 悬垂项
+            # （get_to - get_to_dir * 9）会每 tick 把身体往下压一点点，实测
+            # 0.24 px/tick（3 s 漂 28.8 px、15 s 漂 143 px）。钉住锚点后它只是
+            # 在锚点上下微振，这才是"待在原地"。
+            get_to = self._meditate_anchor or self.creature.chunk0
+            look_point = (self.creature.head[0],
+                          self.creature.head[1] - C.MEDITATE_LOOK_UP)
         else:
-            self._talk_point = None
-            self._talk_anchor = None
-
-        look_point = (self.cursor if self.behaviour != "roaming" and self.cursor is not None
-                      else self.wander.look_point)
+            get_to, look_point = self._behaviour_targets()
 
         # ---- base: the puppet leads, the carriage follows (oracle.cs:327-331) --
         # baseMoving = Distance(BasePos, baseIdeal) > (baseMoving ? 50f : 350f)
@@ -1014,6 +1148,7 @@ class SimulationState:
             kill_flash=self.kill.flash_progress,
             cursor=self.cursor,
             behaviour=self.behaviour,
+            eyes_closed=self.posture == "meditate",
             time=self.time,
             ticks=self.ticks,
             bounds=self._bounds,
@@ -1056,6 +1191,11 @@ class SimulationState:
             self._ritual_event in ("flash", "tremble_done"),
         )
         self._ritual_event = None          # 一次性：同一 tick 的 flash 只算一次仪式
+        # ---- 空闲自语（2026-11-01 第一组）：20 min 没有任何互动才说一句 -----
+        # "互动"= 拖拽 / 戳 / 光标在动 / 仪式 / 任何事件真的说了话。光标在动也算，
+        # 否则"人在狂敲键盘但没碰她"会被当成没人，每 20 min 自言自语一次。
+        self._step_idle_talk(interacting=self.dragging or bool(fired) or
+                             self.cursor_speed > C.SCORE_MOTION_MIN)
         if fired:
             asked = False
             if self.llm is not None and self.dialogue_enabled:
@@ -1067,6 +1207,21 @@ class SimulationState:
             if not asked:
                 self._say(self.lines.next_line(self.appearance.key, fired))
         self.dialogue.step()
+
+    def _step_idle_talk(self, interacting: bool) -> None:
+        """空闲计时 → 排一条 ``idle_talk``（20 min，用户 2026-10-31 定的初值）。
+
+        计时器在这里而不是在 ``events`` 里：``events`` 只管"这一 tick 说哪句"，
+        而"多久算久"是仿真层的状态。仪式进行中不算空闲（那本来就是互动），
+        也不会在仪式里插一句自言自语。
+        """
+        if interacting:
+            self._reset_idle()
+            return
+        self._idle_ticks += 1
+        if self._idle_ticks >= C.DIALOGUE_IDLE_COOLDOWN:
+            self._reset_idle()
+            self.events.push("idle_talk")
 
     def _say(self, line: str | None) -> None:
         """说一句（``None`` / 空串 = 这次不说话）。顺手记下"上一句"。"""
@@ -1147,6 +1302,12 @@ class SimulationState:
             },
             "time": round(self.time, 2),
             "behaviour": self.behaviour,
+            # 姿态叠加层（2026-11-01）："" 或 "meditate"。**不进** behaviour：
+            # 抽签那三个值是被拟合过的合同（AGENTS §6.2），多一个值会动 75 %。
+            "posture": self.posture,
+            "meditate_left": self.meditate_left,
+            "idle_ticks": self._idle_ticks,
+            "tray_status": self.tray_status(),
             "drag": self.drag_mode,
             "temper": round(self.temper.value, 4),
             "kill": {"phase": self.kill.phase, "fac": round(self.kill.kill_fac, 4),

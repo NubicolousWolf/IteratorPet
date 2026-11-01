@@ -151,6 +151,22 @@ class WinTray(QObject):
             ctypes.windll.shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self._data()))
             self._added = False
 
+    def set_tooltip(self, text: str) -> bool:
+        """改托盘悬停提示（E2，2026-11-01）。没注册时只记下来，``show()`` 会带上。
+
+        ``NIM_MODIFY`` 只改 ``szTip``，不动图标与回调；调用方按 1 Hz 轮询，
+        值没变就直接返回，免得每帧都发一次 shell 调用。
+        """
+        text = str(text or "")
+        if text == self._tooltip:
+            return True
+        self._tooltip = text
+        if not self._added:
+            return True
+        data = self._data()
+        data.uFlags = NIF_TIP
+        return bool(ctypes.windll.shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(data)))
+
     # -- events -------------------------------------------------------------
     def _on_message(self, lparam: int) -> None:
         if lparam in (WM_RBUTTONUP, WM_CONTEXTMENU):

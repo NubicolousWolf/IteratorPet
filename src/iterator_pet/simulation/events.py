@@ -20,6 +20,12 @@ from dataclasses import dataclass, field
 
 from . import constants as C
 
+#: 外部可以 ``push()`` 进来的事件（2026-11-01 第一组）。
+#: 它们不是"状态变化"：启动、被戳、空闲自语都没有一个可观测的前后态可比，
+#: 所以由调用方显式排队（``SimulationState.poke()`` / ``announce_startup()`` /
+#: ``_step_idle_talk()``），再由 :meth:`DialogueEvents.tick` 每 tick 最多取一条。
+PENDING_EVENTS = ("startup", "poke", "idle_talk")
+
 
 @dataclass
 class DialogueEvents:
@@ -31,10 +37,29 @@ class DialogueEvents:
     drag_fires: int = 0
     talk_fires: int = 0
     ritual_fires: int = 0
+    poke_fires: int = 0
+    # 外部触发的事件（2026-11-01 第一组）：``startup`` / ``poke`` / ``idle_talk``。
+    # 三者都不是"状态变化"，是别人**明确要求说一句**，所以走队列，不走状态比对。
+    pending: str | None = None
+    poke_cooldown: int = 0
+    poke_cooldown_ticks: int = field(default_factory=lambda: C.DIALOGUE_POKE_COOLDOWN)
     # 可调冷却（单位 tick，40 TPS）；窗口层按 llm.json 里的秒数换算后写进来
     drag_cooldown_ticks: int = field(default_factory=lambda: C.DIALOGUE_DRAG_COOLDOWN)
     talk_cooldown_ticks: int = field(default_factory=lambda: C.TALK_COOLDOWN_TICKS)
     ritual_cooldown_ticks: int = field(default_factory=lambda: C.DIALOGUE_RITUAL_COOLDOWN)
+
+    def push(self, name: str) -> bool:
+        """排一个外部事件（``startup`` / ``poke`` / ``idle_talk``）。返回是否排进去了。
+
+        同一 tick 只留一个：戳了一下又来一条 ``idle`` 是不可能的（空闲恰恰要求
+        没有互动），真撞上了也是后到的覆盖先到的。
+        """
+        if name not in PENDING_EVENTS:
+            return False
+        if name == "poke" and self.poke_cooldown > 0:
+            return False
+        self.pending = name
+        return True
 
     def set_cooldowns(self, drag: int | None = None, talk: int | None = None,
                       ritual: int | None = None) -> None:
@@ -58,12 +83,23 @@ class DialogueEvents:
             self.talk_cooldown -= 1
         if self.ritual_cooldown > 0:
             self.ritual_cooldown -= 1
+        if self.poke_cooldown > 0:
+            self.poke_cooldown -= 1
 
         fired: str | None = None
         if ritual_done and self.ritual_cooldown <= 0:
             fired = "ritual"
             self.ritual_cooldown = self.ritual_cooldown_ticks
             self.ritual_fires += 1
+            self.pending = None          # 仪式优先：同一 tick 里别的都得让路
+        elif self.pending is not None:
+            # 外部排进来的（启动问候 / 戳一下 / 空闲自语）。仪式进行中作废：
+            # 两套台词会打架，而这条请求本来也没有时效性。
+            fired = None if ritual_active else self.pending
+            self.pending = None
+            if fired == "poke":
+                self.poke_cooldown = self.poke_cooldown_ticks
+                self.poke_fires += 1
         elif dragging and not self.prev_dragging and not ritual_active and self.drag_cooldown <= 0:
             fired = "drag"
             self.drag_cooldown = self.drag_cooldown_ticks
@@ -87,6 +123,8 @@ class DialogueEvents:
         self.drag_cooldown = 0
         self.talk_cooldown = 0
         self.ritual_cooldown = 0
+        self.poke_cooldown = 0
+        self.pending = None
         self.prev_behaviour = "roaming"
         self.prev_dragging = False
 
@@ -95,12 +133,16 @@ class DialogueEvents:
             "drag_cooldown": self.drag_cooldown,
             "talk_cooldown": self.talk_cooldown,
             "ritual_cooldown": self.ritual_cooldown,
+            "poke_cooldown": self.poke_cooldown,
+            "pending": self.pending,
             "drag_fires": self.drag_fires,
             "talk_fires": self.talk_fires,
             "ritual_fires": self.ritual_fires,
+            "poke_fires": self.poke_fires,
             "cooldown_ticks": {
                 "drag": self.drag_cooldown_ticks,
                 "talk": self.talk_cooldown_ticks,
                 "ritual": self.ritual_cooldown_ticks,
+                "poke": self.poke_cooldown_ticks,
             },
         }

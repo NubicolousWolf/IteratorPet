@@ -293,6 +293,25 @@ SCORE_FRESHNESS_RECOVER = 1.0 / 240.0  # 6 s of not doing it refills it
 # spread over parking 75.0-76.2 % and the hover ramp is what decides a boundary.
 # Reproduce: _work/behaviour_ablation.py (group A).
 FRESHNESS_FLOOR = 0.35
+
+# ------------------------------------------------------ meditate (打坐) ----
+# ss.cs:4145-4157 ``MovementBehavior.Meditate``: the iterator parks, closes its
+# eyes (``EyesClosed => movementBehavior == Meditate``, ss.cs:3153) and looks
+# 40 px up along its own body (``lookPoint = firstChunk.pos + new Vector2(0,-40)``).
+# The source walks to ``MiddleOfTile(24,17)`` first; the user (2026-10-31)
+# explicitly vetoed that -- "去掉移动到中心，就待在原地" -- so our destination is the
+# body's own position. The entry odds, the stay length and the 20 s "the cursor
+# has been still" precondition are OURS; the 0.001/tick exit roll is the source's
+# (ss.cs:4147), i.e. a median stay of ~700 ticks (17 s) once it sits down.
+# Reported as ``status()["posture"]``, **not** as a fourth behaviour: the draw
+# weights in BEHAVIOUR_BASE were fitted against the user's "roaming 75 %" target
+# and adding a fourth roulette arm would silently move that number.
+MEDITATE_STILL_TICKS = 800        # 20 s of a motionless cursor before it may sit
+MEDITATE_ENTER_CHANCE = 1.0 / 300.0
+MEDITATE_EXIT_CHANCE = 0.001      # ss.cs:4147
+MEDITATE_MIN_TICKS = 200          # 5 s: never stands up instantly
+MEDITATE_MAX_TICKS = 2400         # 60 s ceiling; the 0.001 roll usually ends it
+MEDITATE_LOOK_UP = 40.0           # ss.cs:4152
 # ss.cs:4174-4204  Investigate: player.DangerPos + DegToVec(angle) * 150f, with
 # the angle kept inside (-70, 70) and swept at 0.4-0.8 deg/tick, random sign.
 INVESTIGATE_RADIUS = 150.0
@@ -662,6 +681,15 @@ DIALOGUE_FADE_TICKS = 6              # sizeFac 每帧逼近 1/6 -> 6 帧弹出�
 DIALOGUE_HOLD_BASE = 60              # 说完停多久（tick）
 DIALOGUE_HOLD_PER_CHAR = 2.0
 DIALOGUE_TYPE_TICKS_PER_CHAR = 2     # 逐字：每 2 tick 出一个字（20 字/秒）
+
+# ---- 2026-11-01 第一组：戳一下 / 启动问候 / 空闲自语 ----
+# 「点击被视作是戳了一下人偶」：按下去到松开之间**屏幕位移**小于这个数（px）就算戳。
+# 阈值放在平台层用（pet_window），单位是屏幕 px，不是仿真 px —— 手感跟着手走。
+POKE_SLOP_PX = 5.0
+# 戳一下之后多久还能再触发台词（10 s）。不设的话连点十下就是十句。
+DIALOGUE_POKE_COOLDOWN = 400
+# 「先设置二十分钟触发一次」（用户 2026-10-31）：没有任何互动 20 min 才自言自语一句。
+DIALOGUE_IDLE_COOLDOWN = 48000
 DIALOGUE_DRAG_COOLDOWN = 320         # 8 s（用户拍板）
 # 仪式（杀鼠标成功 / 过去之月挣脱完成）之后多久能再说一句。60 s：
 # 仪式是个"重"事件，连着说会把那一下冲淡。
@@ -690,11 +718,18 @@ DEFAULT_LINES = {
             "talk": ["……"],
             # 仪式（杀鼠标）成功那一 tick
             "ritual": ["……这样就安静了。", "别再来打扰我。"],
+            # 2026-11-01 第一组：启动 / 戳一下 / 空闲自语（不接 LLM 时也走这里）
+            "startup": ["……连接已建立。别打扰我工作。", "又是你。"],
+            "poke": ["别戳。", "有事就说，别动手动脚。"],
+            "idle_talk": ["……算力还有很多富余。", "还在那里吗？"],
         },
         "past_moon": {
             "drag": ["怎么了？", "请不要打扰我。", "（不触发对话）", "我在这里。怎么了？"],
             "talk": ["你还在这里吗？"],
             "ritual": ["……我没事。", "谢谢你还在。"],
+            "startup": ["你好，小家伙。今天也来看看吗？", "系统刚恢复……很高兴见到你。"],
+            "poke": ["嗯？怎么了？", "我在呢。"],
+            "idle_talk": ["外面今天安静吗？", "坐久了，稍微歇一会儿吧。"],
         },
     },
 }

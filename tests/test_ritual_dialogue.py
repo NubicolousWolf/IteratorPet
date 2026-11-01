@@ -123,8 +123,11 @@ def test_an_abort_is_not_a_ritual():
 def test_the_dialogue_tab_offers_the_ritual_group(tmp_path):
     tab = DialogueTab(Lines(path=tmp_path / "lines.json"))
     items = [tab.event_box.itemText(i) for i in range(tab.event_box.count())]
-    assert items == ["拖拽", "长时间静止", "仪式"]
+    # 2026-11-01 第一组把三组变成六组（启动 / 戳一下 / 空闲自语 接在后面），
+    # 仪式仍是第 3 项、下标 2 —— 下面两行就是靠这个下标读的。
+    assert items == ["拖拽", "长时间静止", "仪式", "启动时", "戳一下", "空闲自语"]
     tab.event_box.setCurrentIndex(2)
+    assert tab.event_box.currentData() == "ritual"
     assert tab.list.count() == len(C.DEFAULT_LINES["characters"]["pebbles"]["ritual"])
 
 

@@ -248,10 +248,13 @@ def test_state_reports_path_existence_and_entries(tmp_path):
     assert state["path"] == str(path)
     assert state["exists"] is True
     assert state["size"] > 0
-    # 6 组：pebbles 4+1+2、past_moon 4+1+2 —— ritual 是 2026-10-30 用户要求新加的
-    # 事件（仪式成功时说一句），所以总数从 10 变成 14。
-    assert state["entries"] == 14
-    assert state["characters"]["past_moon"] == ["drag", "ritual", "talk"]
+    # 每个角色 6 组 13 条：drag 4 + talk 1 + ritual 2 + startup 2 + poke 2 + idle_talk 2。
+    # 演进：ritual 是 2026-10-30 新加的事件（10 → 14）；2026-11-01 第一组又加了
+    # 启动 / 戳一下 / 空闲自语三组（14 → 26）。**这是规格变了，不是为了让测试过。**
+    assert state["entries"] == 26
+    assert state["characters"]["past_moon"] == [
+        "drag", "idle_talk", "poke", "ritual", "startup", "talk",
+    ]
     assert state["loaded_from_file"] is True
 
 

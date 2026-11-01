@@ -35,6 +35,7 @@ GROUPS = {
     "test_fixed_loop": "sim",
     "test_bubble": "ui",
     "test_cursorfx": "ui",
+    "test_interaction": "ui",
     "test_assets_extractor": "io",
     "test_dialogue": "talk",
     "test_ritual_dialogue": "talk",

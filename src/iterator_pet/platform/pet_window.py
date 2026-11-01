@@ -17,6 +17,7 @@ from ..llm import config as llm_config
 from ..llm import templates as llm_templates
 from ..rendering.hit import hit_test
 from ..rendering.canvas import PetCanvas
+from ..simulation import constants as C
 from ..simulation.state import SimulationState
 from .fixed_loop import DEFAULT_MAX_SUBSTEPS, GAME_DT, FixedStepLoop
 from .workspace import ScreenWorkspace
@@ -98,9 +99,14 @@ class PetWindow(PetCanvas):
         self.simulation.llm = LLMRouter(self.llm, character=self._character)
         self.simulation.dialogue_enabled = self.dialogue_enabled
         self.apply_llm_settings()
+        # 启动问候（2026-11-01 第一组 B4）：排一句 startup，仿真在下一 tick 说。
+        # 放在窗口层而不是 SimulationState.__init__：测试里上百次构造不该冒出一句话。
+        self.simulation.announce_startup()
         self.click_through = bool(config.click_through)
         self._paused = False
         self._press_global = None
+        # 按下但还没走够阈值的那一次（点击 vs 拖拽，2026-11-01）
+        self._pending_press: tuple[str, tuple[float, float]] | None = None
         self._cursor_fx_fired = False
         self._press_at = 0.0
         self._last = time.perf_counter()
@@ -261,9 +267,10 @@ class PetWindow(PetCanvas):
             return
         # 头/躯干都是拖 chunk0（头被 _weld 焊在 chunk0 上）；底座走 P1 的沿轨道拖拽
         mode = "base" if kind == "base" else "body"
-        if not self.simulation.begin_drag(mode, point):
-            event.ignore()
-            return
+        # **按下不等于拖拽**（2026-11-01 第一组 D1）：先记下"想抓哪儿"，等鼠标真的
+        # 走开 POKE_SLOP_PX 才 begin_drag。否则一次点击就会把人偶挪到光标下，
+        # 而用户要的是"点击 = 戳了她一下"。
+        self._pending_press = (mode, point)
         self._press_global = event.globalPosition()
         self._press_at = time.perf_counter()
         event.accept()
@@ -272,12 +279,27 @@ class PetWindow(PetCanvas):
         if event.button() != Qt.MouseButton.LeftButton:
             super().mouseReleaseEvent(event)
             return
+        if self._pending_press is not None:
+            # 按下后没走够阈值就松手 = 戳了一下：唤醒 + 排队一句台词，不移动。
+            self._pending_press = None
+            self.simulation.poke()
+            event.accept()
+            return
         self.simulation.end_drag()
         event.accept()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         # 拖拽位置由 _step_once 里**每 tick** 采一次 QCursor.pos()；这里只兜住
         # "按下后还没到下一个 tick"的那一下移动。
+        if self._pending_press is not None and not self.simulation.dragging:
+            delta = event.globalPosition() - self._press_global
+            if abs(delta.x()) + abs(delta.y()) >= C.POKE_SLOP_PX:
+                mode, point = self._pending_press
+                self._pending_press = None
+                if not self.simulation.begin_drag(mode, point):
+                    # 冷却/仪式里抓不动：这一下作废，别在松手时又补一个 poke。
+                    super().mouseMoveEvent(event)
+                    return
         if getattr(self.simulation, "dragging", False):
             point = self._sim_point(event.globalPosition())
             if point is not None:

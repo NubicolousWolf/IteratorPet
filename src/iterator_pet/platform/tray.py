@@ -85,6 +85,15 @@ def make_icon(size: int = ICON_SIZE) -> QIcon:
 def tray_menu(window, on_dev_panel=None) -> QMenu:
     """右键托盘时弹出的菜单（不持有引用：每次现建，避免状态过期）。"""
     menu = QMenu()
+    # E2（2026-11-01 第一组）：菜单第一行只读状态，回答"她现在在干什么"。
+    # 菜单每次现建、状态每次现算，所以永远是最新值，不需要任何信号。
+    sim = getattr(window, "simulation", None)
+    if sim is not None and hasattr(sim, "tray_status"):
+        action_status = QAction(f"状态：{sim.tray_status()}", menu)
+        action_status.setEnabled(False)
+        menu.addAction(action_status)
+        menu.addSeparator()
+
     action_pause = QAction("继续" if getattr(window, "paused", False) else "暂停", menu)
     action_pause.triggered.connect(window.toggle_pause)
     menu.addAction(action_pause)

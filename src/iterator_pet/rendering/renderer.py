@@ -1025,15 +1025,22 @@ def draw_puppet_head(painter: QPainter, state: RenderState) -> None:
     # is 1..2 px wide and exactly 2 px tall. The near-black (0.02, 0, 0) at
     # og.cs:1948 is Moon's branch; Pebbles keeps the FSprite default, white.
     eye = tinted("pixel", state.appearance.eye)
+    # og.cs:1869  eyesOpen = EyesClosed ? 0 : 1（EyesClosed 只在 Meditate 时成立，
+    # ss.cs:3153）。眼睛是 1x1 的 `pixel`，所以 scaleX/scaleY **就是**像素尺寸：
+    # 闭眼 = scaleY 收敛到 1（一条细线）、scaleX 多 1（'1 - eyesOpen' 那一项）。
+    # 2026-11-01 打坐（B1）就靠这两行把眼睛闭上，没有别的动画。
+    eyes_open = 0.0 if state.eyes_closed else 1.0
+    eye_h = 1.0 + (state.appearance.eye_scale_y - 1.0) * eyes_open
     for index in (0, 1):
         offset, width = eye_offset(look, perp, axis, index)
+        width += 1.0 - eyes_open
         ex = state.head[0] + offset[0]
         ey = state.head[1] + offset[1]
         painter.save()
         painter.translate(QPointF(ex, ey))
         painter.rotate(angle)
         painter.drawPixmap(
-            QRectF(-width * 0.5, -state.appearance.eye_scale_y * 0.5, width, state.appearance.eye_scale_y),
+            QRectF(-width * 0.5, -eye_h * 0.5, width, eye_h),
             eye, QRectF(eye.rect()))
         painter.restore()
 

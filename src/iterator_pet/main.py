@@ -260,6 +260,19 @@ def main(argv: list[str] | None = None) -> int:
         _dbg(f"Shell_NotifyIcon 返回 {shown}")
         if shown:
             window.closed.connect(tray.hide)
+            # E2（2026-11-01 第一组）：托盘悬停提示跟状态走。1 Hz 轮询足够——
+            # 状态最慢的一档（坐下 / 起来）也是秒级，而 set_tooltip 在值没变时
+            # 直接返回，不发 shell 调用。
+            from PySide6.QtCore import QTimer
+
+            status_timer = QTimer(window)
+
+            def _sync_tooltip() -> None:
+                tray.set_tooltip(f"迭代器桌宠 · {window.simulation.tray_status()}")
+
+            status_timer.timeout.connect(_sync_tooltip)
+            status_timer.start(1000)
+            _sync_tooltip()
         _log(f"托盘: Shell_NotifyIcon 注册 {'成功' if shown else '失败'}")
         _dbg("已写日志")
 
